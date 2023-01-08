@@ -39,12 +39,7 @@ int curCol;
 
 // Initializes the board and sets up NCurse
 void Init() {
-  for (int i = 0; i < Rows; i++) {
-    for (int j = 0; j < Cols; j++) {
-      board[i][j] = ' ';
-    }
-  }
-
+  ClearBoard();
   initscr();
   noecho();
   cbreak();
@@ -116,6 +111,10 @@ void MoveTetrominoDown() {
   curRow++;
 }
 
+void MoveTetrominoUp() {
+  curRow--;
+}
+
 // Generates a new Tetromino
 void NewTetromino() {
   curTetromino = Tetrominoes[rand() % 7];
@@ -139,7 +138,7 @@ bool Collision() {
     int row = curRow + b.row;
     int col = curCol + b.col;
 
-    if (row >= Rows || col < 0 || col >= Cols || board[row][col] != ' ') {
+    if (row >= Rows || row < 0 || col < 0 || col >= Cols || board[row][col] != ' ') {
       return true;
     }
   }
