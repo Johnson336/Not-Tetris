@@ -162,7 +162,7 @@ void RemoveCompletedRows() {
     }
 
     if (completed) {
-      completedRows[numCompletedRows++] = i;
+      completedRows[numCompletedRows++] = completedRows[i];
     }
   }
 
