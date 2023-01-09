@@ -1,8 +1,21 @@
 #include <ncurses.h>
 #include <unistd.h>
+#include <random>
+
 
 const int Rows = 20;
 const int Cols = 10;
+const int border_width = 1;
+
+// Represents a game board
+struct Board {
+  int Rows;
+  int Cols;
+  int curRow;
+  int curCol;
+  int score;
+  int level;
+};
 
 // Represents a single block in a Tetromino
 struct Block {
@@ -20,33 +33,23 @@ struct Tetromino {
 
 // The Tetromino shapes
 const Tetromino Tetrominoes[7] = {
-  {{{0, 3, '*'}, {1, 3, '*'}, {2, 3, '*'}, {3, 3, '*'}}, 'I', 0},
-  {{{0, 3, '*'}, {0, 4, '*'}, {1, 3, '*'}, {1, 4, '*'}}, 'O', 0},
-  {{{0, 3, '*'}, {1, 3, '*'}, {2, 3, '*'}, {2, 4, '*'}}, 'T', 0},
-  {{{0, 4, '*'}, {1, 3, '*'}, {1, 4, '*'}, {2, 3, '*'}}, 'S', 0},
-  {{{0, 3, '*'}, {1, 3, '*'}, {1, 4, '*'}, {2, 4, '*'}}, 'Z', 0},
-  {{{0, 3, '*'}, {1, 3, '*'}, {1, 4, '*'}, {1, 5, '*'}}, 'J', 0},
-  {{{0, 5, '*'}, {1, 3, '*'}, {1, 4, '*'}, {1, 5, '*'}}, 'L', 0},
+  {{{0, 0, '*'}, {1, 0, '*'}, {2, 0, '*'}, {3, 0, '*'}}, 'I', 0},
+  {{{0, 0, '*'}, {1, 0, '*'}, {0, 1, '*'}, {1, 1, '*'}}, 'O', 0},
+  {{{0, 0, '*'}, {1, 0, '*'}, {2, 0, '*'}, {1, 1, '*'}}, 'T', 0},
+  {{{1, 0, '*'}, {2, 0, '*'}, {0, 1, '*'}, {1, 1, '*'}}, 'S', 0},
+  {{{0, 0, '*'}, {1, 0, '*'}, {1, 1, '*'}, {2, 1, '*'}}, 'Z', 0},
+  {{{0, 1, '*'}, {1, 1, '*'}, {2, 1, '*'}, {2, 0, '*'}}, 'J', 0},
+  {{{0, 0, '*'}, {1, 0, '*'}, {2, 0, '*'}, {2, 1, '*'}}, 'L', 0},
 };
 
 // The board grid
 char board[Rows][Cols];
 
-// The current Tetromino and its position
-Tetromino curTetromino;
-int curRow;
-int curCol;
+// Details of the current Tetromino
+  Tetromino curTetromino;
+  int curRow;
+  int curCol;
 
-// Initializes the board and sets up NCurse
-void Init() {
-  ClearBoard();
-  initscr();
-  noecho();
-  cbreak();
-  curs_set(0);
-  keypad(stdscr, TRUE);
-  nodelay(stdscr, TRUE);
-}
 
 // Clears the board
 void ClearBoard() {
@@ -56,6 +59,20 @@ void ClearBoard() {
     }
   }
 }
+
+// Initializes the board and sets up NCurse
+void Init() {
+  ClearBoard();
+  initscr();
+  
+  noecho();
+  cbreak();
+  curs_set(0);
+  keypad(stdscr, TRUE);
+  nodelay(stdscr, TRUE);
+}
+
+
 
 // Clears the screen
 void ClearScreen() {
@@ -68,10 +85,32 @@ void ClearScreen() {
 
 // Draws the current Tetromino
 void DrawTetromino() {
-  for (int i = 0; i < 4; i++) {
-    Block b = curTetromino.blocks[i];
-    mvaddch(curRow + b.row, curCol + b.col, curTetromino.c);
+  for (auto x: curTetromino.blocks) {
+    mvaddch( border_width + curRow + x.row, border_width + curCol + x.col, x.c );
   }
+}
+
+// Draws the playing board
+void DrawBoard() {
+  for (int i = 0; i < Rows; i++) {
+    for (int j = 0; j < Cols; j++) {
+      mvaddch(border_width + i, border_width + j, board[i][j]);
+    }
+  }
+}
+
+  // draw Title
+void DrawTitle() {
+
+  mvprintw(-1, Cols/2, "Definitely Not Tetris");
+}
+
+// draw border around the game board
+void DrawBorder() {
+  mvhline(0, 0, '-', Cols + (border_width * 2));
+  mvhline(Rows+1, 0, '-', Cols + (border_width * 2));
+  mvvline(0, 0, '|', Rows + (border_width * 2));
+  mvvline(0, Cols+1, '|', Rows + (border_width * 2));
 }
 
 // Copies the current Tetromino onto the board
@@ -122,14 +161,6 @@ void NewTetromino() {
   curCol = Cols / 2;
 }
 
-// Drops the current Tetromino down until it collides with something
-void DropTetromino() {
-  while (!Collision()) {
-    MoveTetrominoDown();
-  }
-
-  curRow--;
-}
 
 // Returns true if the current Tetromino collides with something
 bool Collision() {
@@ -144,6 +175,15 @@ bool Collision() {
   }
 
   return false;
+}
+
+// Drops the current Tetromino down until it collides with something
+void DropTetromino() {
+  while (!Collision()) {
+    MoveTetrominoDown();
+  }
+
+  curRow--;
 }
 
 // Removes any completed rows
@@ -162,7 +202,7 @@ void RemoveCompletedRows() {
     }
 
     if (completed) {
-      completedRows[numCompletedRows++] = completedRows[i];
+      completedRows[numCompletedRows++] = i;
     }
   }
 
@@ -173,6 +213,17 @@ void RemoveCompletedRows() {
       }
     }
   }
+}
+
+void GameOver() {
+  ClearScreen();
+  int y,x;
+  getmaxyx(stdscr, y, x);
+  mvprintw(y/2, x/2, "Game Over!!");
+  refresh();
+  sleep(5);
+  getch();
+
 }
 
 int main() {
@@ -186,7 +237,9 @@ int main() {
       break;
     }
 
-    ClearScreen();
+    // ClearScreen();
+    clear();
+    system("clear");
 
     if (c == 'a') {
       MoveTetrominoLeft();
@@ -210,23 +263,33 @@ int main() {
     } else {
       MoveTetrominoDown();
       if (Collision()) {
-        MoveTetrominoUp();
+          MoveTetrominoUp();
+          if (curRow == 0) {
+              GameOver();
+              break;
+          }
         CopyToBoard();
         RemoveCompletedRows();
         NewTetromino();
       }
-    }
-
+    } 
+    
+    DrawTitle();
+    DrawBoard();
     DrawTetromino();
-
-    for (int i = 0; i < Rows; i++) {
-      for (int j = 0; j < Cols; j++) {
-        mvaddch(i, j, board[i][j]);
-      }
+    DrawBorder();
+   /* int maxy,maxx;
+    getmaxyx(stdscr, maxy, maxx);
+    int numWaterfalls = (rand() % 10); // somewhere between 1 and 10 waterfalls going at once
+    for (int i=0;i<numWaterfalls; i++) {
+        int x = (rand() % maxx); // pick a column between 1 and maxx
+        for (int y=0;y<maxy;y++) {
+            mvprintw(y, x, "%d", y);
+        }
     }
-
+    */
     refresh();
-    usleep(200000);
+    usleep((useconds_t)200000);
   }
 
   endwin();
