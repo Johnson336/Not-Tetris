@@ -232,7 +232,7 @@ void DropTetromino() {
     MoveTetrominoDown();
   }
   if (droppedRows)
-    score += increaseScore(droppedRows-1);
+    score += droppedRows-1;
   curRow--;
 }
 
@@ -274,6 +274,8 @@ void RemoveCompletedRows() {
 
 void GameOver() {
   mvprintw(11, 1, "Game Over!!");
+  mvprintw(13, 1, "Final score");
+  mvprintw(14, 2, "%d", score);
   refresh();
   sleep(5);
   getch();
@@ -310,6 +312,7 @@ int main() {
     } else if (c == 'w') {
       RotateTetromino();
       if (Collision()) {
+        // do some collision checking to slide piece toward center
         RotateTetromino();
         RotateTetromino();
         RotateTetromino();
