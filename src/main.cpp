@@ -1,21 +1,15 @@
 #include <ncurses.h>
 #include <unistd.h>
 #include <random>
+#include <chrono>
 
 
 const int Rows = 20;
 const int Cols = 10;
 const int border_width = 1;
+const double frames = 1.0 / 60.0;
+double level_timer = 1.0;
 
-// Represents a game board
-struct Board {
-  int Rows;
-  int Cols;
-  int curRow;
-  int curCol;
-  int score;
-  int level;
-};
 
 // Represents a single block in a Tetromino
 struct Block {
@@ -46,9 +40,17 @@ const Tetromino Tetrominoes[7] = {
 char board[Rows][Cols];
 
 // Details of the current Tetromino
-  Tetromino curTetromino;
-  int curRow;
-  int curCol;
+Tetromino nextTetromino;
+Tetromino curTetromino;
+int curRow;
+int curCol;
+unsigned long long score;
+int level;
+int clearedRows;
+
+// initialize our redraw timer
+std::uint64_t now;
+std::uint64_t now_2;
 
 
 // Clears the board
@@ -60,8 +62,17 @@ void ClearBoard() {
   }
 }
 
+std::uint64_t getTimeNow() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
 // Initializes the board and sets up NCurse
 void Init() {
+  curTetromino = Tetrominoes[rand() % 7];
+  nextTetromino = Tetrominoes[rand() % 7];
+  score = 0;
+  level = 1;
+  clearedRows = 0;
   ClearBoard();
   initscr();
   
@@ -70,9 +81,29 @@ void Init() {
   curs_set(0);
   keypad(stdscr, TRUE);
   nodelay(stdscr, TRUE);
+  now = getTimeNow();
+  now_2 = getTimeNow();
 }
 
-
+int increaseScore(int lines) {
+  switch (lines) {
+    case 1:
+      return 40 * (level + 1);
+      break;
+    case 2:
+      return 100 * (level + 1);
+      break;
+    case 3:
+      return 300 * (level + 1);
+      break;
+    case 4:
+      return 1200 * (level + 1);
+      break;
+    default:
+      return 0;
+      break;
+  }
+}
 
 // Clears the screen
 void ClearScreen() {
@@ -102,7 +133,7 @@ void DrawBoard() {
   // draw Title
 void DrawTitle() {
 
-  mvprintw(-1, Cols/2, "Definitely Not Tetris");
+  mvprintw(25, 2, "Definitely Not Tetris");
 }
 
 // draw border around the game board
@@ -111,6 +142,21 @@ void DrawBorder() {
   mvhline(Rows+1, 0, '-', Cols + (border_width * 2));
   mvvline(0, 0, '|', Rows + (border_width * 2));
   mvvline(0, Cols+1, '|', Rows + (border_width * 2));
+}
+
+// draw boxes for score, next piece, level, and cleared lines
+void DrawScore() {
+  mvprintw(2, 14, "Next piece");
+  for (auto x: nextTetromino.blocks) {
+    mvaddch( 3 + x.row, 14 + x.col, x.c );
+  }
+
+  mvprintw(8, 14, "Score");
+  mvprintw(9, 14, "%d", score);
+  mvprintw(12, 14, "Level");
+  mvprintw(13, 14, "%d", level);
+  mvprintw(15, 14, "Lines cleared");
+  mvprintw(16, 14, "%d", clearedRows);
 }
 
 // Copies the current Tetromino onto the board
@@ -156,7 +202,8 @@ void MoveTetrominoUp() {
 
 // Generates a new Tetromino
 void NewTetromino() {
-  curTetromino = Tetrominoes[rand() % 7];
+  curTetromino = nextTetromino;
+  nextTetromino = Tetrominoes[rand() % 7];
   curRow = 0;
   curCol = Cols / 2;
 }
@@ -179,10 +226,13 @@ bool Collision() {
 
 // Drops the current Tetromino down until it collides with something
 void DropTetromino() {
+  int droppedRows = 0;
   while (!Collision()) {
+    droppedRows++;
     MoveTetrominoDown();
   }
-
+  if (droppedRows)
+    score += increaseScore(droppedRows-1);
   curRow--;
 }
 
@@ -213,13 +263,17 @@ void RemoveCompletedRows() {
       }
     }
   }
+  if (numCompletedRows) {
+    score += increaseScore(numCompletedRows);
+    clearedRows += numCompletedRows;
+    if (clearedRows >= (level * 10)) {
+      level++;
+    }
+  }
 }
 
 void GameOver() {
-  ClearScreen();
-  int y,x;
-  getmaxyx(stdscr, y, x);
-  mvprintw(y/2, x/2, "Game Over!!");
+  mvprintw(11, 1, "Game Over!!");
   refresh();
   sleep(5);
   getch();
@@ -230,7 +284,9 @@ int main() {
   Init();
   NewTetromino();
 
-  while (true) {
+  bool advanceLogic = true;
+  bool redraw = true;
+  while (1) {
     int c = getch();
 
     if (c == 'q') {
@@ -261,35 +317,51 @@ int main() {
     } else if (c == 's') {
       DropTetromino();
     } else {
-      MoveTetrominoDown();
-      if (Collision()) {
-          MoveTetrominoUp();
-          if (curRow == 0) {
-              GameOver();
-              break;
-          }
-        CopyToBoard();
-        RemoveCompletedRows();
-        NewTetromino();
+      if ((getTimeNow() - now_2) >= (level_timer*200)) {
+        now_2 = getTimeNow();
+        advanceLogic = true;
       }
-    } 
-    
-    DrawTitle();
-    DrawBoard();
-    DrawTetromino();
-    DrawBorder();
-   /* int maxy,maxx;
-    getmaxyx(stdscr, maxy, maxx);
-    int numWaterfalls = (rand() % 10); // somewhere between 1 and 10 waterfalls going at once
-    for (int i=0;i<numWaterfalls; i++) {
-        int x = (rand() % maxx); // pick a column between 1 and maxx
-        for (int y=0;y<maxy;y++) {
-            mvprintw(y, x, "%d", y);
+      if (advanceLogic) {
+        advanceLogic = false;
+        MoveTetrominoDown();
+        if (Collision()) {
+            MoveTetrominoUp();
+            if (curRow == 0) {
+                GameOver();
+                break;
+            }
+          CopyToBoard();
+          RemoveCompletedRows();
+          NewTetromino();
         }
+      }
     }
-    */
-    refresh();
-    usleep((useconds_t)200000);
+
+    if ((getTimeNow() - now) >= frames) {
+      now = getTimeNow();
+      redraw = true;
+    }
+    
+
+    if (redraw) {
+      redraw = false;
+      DrawTitle();
+      DrawBoard();
+      DrawTetromino();
+      DrawBorder();
+      DrawScore();
+    /* int maxy,maxx;
+      getmaxyx(stdscr, maxy, maxx);
+      int numWaterfalls = (rand() % 10); // somewhere between 1 and 10 waterfalls going at once
+      for (int i=0;i<numWaterfalls; i++) {
+          int x = (rand() % maxx); // pick a column between 1 and maxx
+          for (int y=0;y<maxy;y++) {
+              mvprintw(y, x, "%d", y);
+          }
+      }
+      */
+      refresh();
+    }
   }
 
   endwin();
