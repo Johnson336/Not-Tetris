@@ -61,6 +61,8 @@
         "algorithm": "cpp",
         "iostream": "cpp",
         "numeric": "cpp",
-        "random": "cpp"
+        "random": "cpp",
+        "allegro.h": "c",
+        "functional": "cpp"
     }
 }
