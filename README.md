@@ -1,1 +1,13 @@
-# Not-Tetris-Command-Line
+# Not-Tetris Game Project
+
+Welcome to my Not-Tetris Game Project. Below are some screenshots showing progression in development phases. This project began running on the ncurses.h console graphics system, and progressed to using Allegro 5 OpenGL Game library for GPU-accelerated graphics.
+
+## Version 2.0
+![Allegro 5 Graphics](https://github.com/Johnson336/Not-Tetris-Command-Line/blob/main/screenshots/Screenshot2.png)
+
+OpenGL graphics
+
+## Version 1.0
+![ncurses.h console graphics](https://github.com/Johnson336/Not-Tetris-Command-Line/blob/main/screenshots/Screenshot1.jpeg)
+
+Console graphics
