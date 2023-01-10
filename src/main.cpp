@@ -69,6 +69,8 @@ struct Block {
 struct Tetromino {
   Block blocks[16];
   char c;
+  int row;
+  int col;
   int rotation;
   ALLEGRO_COLOR color;
 };
@@ -78,31 +80,31 @@ const Tetromino Tetrominoes[7] = {
   {{ {1, 0}, {1, 1}, {1, 2}, {1, 3},
      {0, 2}, {1, 2}, {2, 2}, {3, 2},
      {1, 0}, {1, 1}, {1, 2}, {1, 3},
-     {0, 2}, {1, 2}, {2, 2}, {3, 2} }, 'I', 0, cyan},
+     {0, 2}, {1, 2}, {2, 2}, {3, 2} }, 'I', 0, 0, 0, cyan},
   {{ {1, 0}, {1, 1}, {1, 2}, {2, 1},
      {0, 1}, {1, 0}, {1, 1}, {2, 1},
      {1, 1}, {2, 0}, {2, 1}, {2, 2},
-     {0, 1}, {1, 1}, {1, 2}, {2, 1} }, 'T', 0, purple},
+     {0, 1}, {1, 1}, {1, 2}, {2, 1} }, 'T', 0, 0, 0, purple},
   {{ {1, 0}, {1, 1}, {1, 2}, {2, 0},
      {0, 0}, {0, 1}, {1, 1}, {2, 1},
      {1, 2}, {2, 0}, {2, 1}, {2, 2},
-     {0, 1}, {1, 1}, {2, 1}, {2, 2} }, 'L', 0, orange},
+     {0, 1}, {1, 1}, {2, 1}, {2, 2} }, 'L', 0, 0, 0, orange},
   {{ {1, 0}, {1, 1}, {1, 2}, {2, 2},
      {0, 1}, {1, 1}, {2, 0}, {2, 1},
      {1, 0}, {2, 0}, {2, 1}, {2, 2},
-     {0, 1}, {0, 2}, {1, 1}, {2, 1} }, 'J', 0, blue},
+     {0, 1}, {0, 2}, {1, 1}, {2, 1} }, 'J', 0, 0, 0, blue},
   {{ {1, 1}, {1, 2}, {2, 0}, {2, 1},
      {0, 0}, {1, 0}, {1, 1}, {2, 1},
      {1, 1}, {1, 2}, {2, 0}, {2, 1},
-     {0, 0}, {1, 0}, {1, 1}, {2, 1} }, 'S', 0, green},
+     {0, 0}, {1, 0}, {1, 1}, {2, 1} }, 'S', 0, 0, 0, green},
   {{ {1, 0}, {1, 1}, {2, 1}, {2, 2},
      {0, 2}, {1, 1}, {1, 2}, {2, 1},
      {1, 0}, {1, 1}, {2, 1}, {2, 2},
-     {0, 2}, {1, 1}, {1, 2}, {2, 1} }, 'Z', 0, red},
+     {0, 2}, {1, 1}, {1, 2}, {2, 1} }, 'Z', 0, 0, 0, red},
   {{ {1, 1}, {1, 2}, {2, 1}, {2, 2},
      {1, 1}, {1, 2}, {2, 1}, {2, 2},
      {1, 1}, {1, 2}, {2, 1}, {2, 2},
-     {1, 1}, {1, 2}, {2, 1}, {2, 2} }, 'O', 0, yellow},
+     {1, 1}, {1, 2}, {2, 1}, {2, 2} }, 'O', 0, 0, 0, yellow},
 };
 
 // The board grid
@@ -113,14 +115,13 @@ Tetromino nextTetromino;
 Tetromino curTetromino;
 Tetromino heldTetromino;
 bool held = false;
-int curRow;
-int curCol;
 unsigned long long score;
 int level;
 int clearedRows;
 bool paused;
 bool redraw;
 bool advanceLogic;
+Tetromino highlight;
 
 // Clears the board
 void ClearBoard() {
@@ -168,52 +169,52 @@ int increaseScore(int lines) {
 void CopyToBoard() {
   for (int i=0;i<4;i++) {
     Block &b = curTetromino.blocks[i + curTetromino.rotation];
-    board[curRow + b.row][curCol + b.col] = curTetromino.c;
+    board[curTetromino.row + b.row][curTetromino.col + b.col] = curTetromino.c;
   }
 }
 
 // Rotates the current Tetromino clockwise
-void RotateTetromino() {
+void RotateTetromino(Tetromino &t) {
   // rotations are 0->4->8->12->0
-  curTetromino.rotation+=4;
-  if (curTetromino.rotation > 12)
-    curTetromino.rotation = 0;
+  t.rotation+=4;
+  if (t.rotation > 12)
+    t.rotation = 0;
 }
 
 // Moves the current Tetromino left
 void MoveTetrominoLeft() {
-  curCol--;
+  curTetromino.col--;
 }
 
 // Moves the current Tetromino right
 void MoveTetrominoRight() {
-  curCol++;
+  curTetromino.col++;
 }
 
 // Moves the current Tetromino down
 void MoveTetrominoDown() {
-  curRow++;
+  curTetromino.row++;
 }
 
 void MoveTetrominoUp() {
-  curRow--;
+  curTetromino.row--;
 }
 
 // Generates a new Tetromino
 void NewTetromino() {
   curTetromino = nextTetromino;
   nextTetromino = Tetrominoes[rand() % 7];
-  curRow = 0;
-  curCol = 4;
+  curTetromino.row = 0;
+  curTetromino.col = 4;
 }
 
 // Returns true if the current Tetromino collides with something
-bool Collision(Tetromino &t, int y) {
+bool Collision(Tetromino &t, int y, int x) {
   for (int i = 0; i < 4; i++) {
     Block &b = t.blocks[i + t.rotation];
-    // This allows collision checking for current piece and ghost piece
+    // This allows collision checking for any piece passed as parameter
     int row = y + b.row; 
-    int col = curCol + b.col;
+    int col = x + b.col;
 
     // Bounds and overlap checking
     if (row >= Rows || row < 0 || col < 0 || col >= Cols || board[row][col] != ' ') {
@@ -228,7 +229,7 @@ void HoldTetromino() {
   // Swap held and current Tetrominos
   if (held) {
     // only swap if the held piece will fit
-    if (!Collision(heldTetromino, curRow)) {
+    if (!Collision(heldTetromino, curTetromino.row, curTetromino.col)) {
       Tetromino temp = heldTetromino;
       heldTetromino = curTetromino;
       curTetromino = temp;
@@ -249,13 +250,13 @@ void Pause() {
 // Drops the current Tetromino down until it collides with something
 void DropTetromino() {
   int droppedRows = 0;
-  while (!Collision(curTetromino, curRow)) {
+  while (!Collision(curTetromino, curTetromino.row, curTetromino.col)) {
     droppedRows++;
     MoveTetrominoDown();
   }
   if (droppedRows)
     score += droppedRows-1;
-  curRow--;
+  curTetromino.row--;
 }
 
 // Removes any completed rows
@@ -429,7 +430,7 @@ void printOutline(Tetromino &t, int col, int row) {
 }
 
 void drawTetromino() {
-  printTetromino(curTetromino, curCol, curRow);
+  printTetromino(curTetromino, curTetromino.col, curTetromino.row);
 }
 
 
@@ -437,18 +438,21 @@ void drawScore(ALLEGRO_FONT* font) {
   drawText("Held Piece", Cols + 2, 1, font, white);
   if (held)
     printTetromino(heldTetromino, Cols + 3, 2);
-  drawText("Next Piece", Cols + 2, 8, font, white);
-  printTetromino(nextTetromino, Cols + 3, 9);
-  drawText("Score", Cols + 2, 15, font, white);
+  drawText("Next Piece", Cols + 2, 7, font, white);
+  printTetromino(nextTetromino, Cols + 3, 8);
+  drawText("Score", Cols + 2, 13, font, white);
   char outText[20];
   snprintf(outText, 20, "%07llu", score);
-  drawText(outText, Cols + 3, 16, font, white);
-  drawText("Level", Cols + 2, 17, font, white);
+  drawText(outText, Cols + 3, 14, font, white);
+  drawText("Level", Cols + 2, 15, font, white);
   snprintf(outText, 20, "%d", level);
-  drawText(outText, Cols + 3, 18, font, white);
-  drawText("Lines Cleared", Cols + 2, 19, font, white);
+  drawText(outText, Cols + 3, 16, font, white);
+  drawText("Lines Cleared", Cols + 2, 17, font, white);
   snprintf(outText, 20, "%d", clearedRows);
-  drawText(outText, Cols + 3, 20, font, white);
+  drawText(outText, Cols + 3, 18, font, white);
+  drawBoxOutline(10.5, 0.0, 9, 6.25, 1.0, white);
+  drawBoxOutline(10.5, 6.5, 9, 5.25, 1.0, white);
+  drawBoxOutline(10.5, 12, 9, 8, 1.0, white);
   
 
 }
@@ -463,13 +467,18 @@ void drawPaused(ALLEGRO_FONT* font) {
 
 // Draw a ghost piece showing potential drop location
 void drawGhost() {
-  int curY = curRow;
-  while (!Collision(curTetromino, curY)) {
+  int curY = curTetromino.row;
+  while (!Collision(curTetromino, curY, curTetromino.col)) {
     curY++;
   }
   curY--;
   // Draw mostly transparent ghost block
-  printOutline(curTetromino, curCol, curY);
+  printOutline(curTetromino, curTetromino.col, curY);
+}
+
+// Draw a highlighted block that our AI is trying to reach
+void drawHighlight() {
+  printTetromino(highlight, highlight.col, highlight.row);
 }
 
 void GameOver(ALLEGRO_FONT* font) {
@@ -491,16 +500,20 @@ void DrawStuff(ALLEGRO_FONT* font) {
   drawBoard();
   drawGrid();
   drawGhost();
+  drawHighlight();
   drawTetromino();
   drawScore(font);
   drawPaused(font);
 }
 
+// perform functions move curTetromino around the game board
+// while receiving boolean feedback whether the action was
+// successfully performed
 bool performMoveDown(ALLEGRO_AUDIO_STREAM* music) {
     MoveTetrominoDown();
-  if (Collision(curTetromino, curRow)) {
+  if (Collision(curTetromino, curTetromino.row, curTetromino.col)) {
     MoveTetrominoUp();
-    if (curRow == 0) {
+    if (curTetromino.row == 0) {
       return true;
     }
     CopyToBoard();
@@ -510,70 +523,170 @@ bool performMoveDown(ALLEGRO_AUDIO_STREAM* music) {
   return false;
 }
 
-void performManualMoveDown(ALLEGRO_AUDIO_STREAM* music) {
+bool performManualMoveDown(ALLEGRO_AUDIO_STREAM* music) {
   MoveTetrominoDown();
-  if (Collision(curTetromino, curRow)) {
+  if (Collision(curTetromino, curTetromino.row, curTetromino.col)) {
     MoveTetrominoUp();
-    if (curRow == 0) {
-      return;
+    if (curTetromino.row == 0) {
+      return false;
     }
     CopyToBoard();
     RemoveCompletedRows(music);
     NewTetromino();
   }
   score++;
+  return true;
 }
 
-void performRotate() {
-  RotateTetromino();
-  if (Collision(curTetromino, curRow)) {
+bool performRotate(Tetromino &t, int y, int x) {
+  RotateTetromino(t);
+  if (Collision(t, y, x)) {
     // do some collision checking to slide piece toward center
-    RotateTetromino();
-    RotateTetromino();
-    RotateTetromino();
+    RotateTetromino(t);
+    RotateTetromino(t);
+    RotateTetromino(t);
+    return false;
   }
+  return true;
 }
 
-void performDrop() {
+bool performDrop() {
   DropTetromino();
   advanceLogic = true;
+  return true;
 }
 
-void performMoveLeft() {
+bool performMoveLeft() {
   MoveTetrominoLeft();
-  if (Collision(curTetromino, curRow)) {
+  if (Collision(curTetromino, curTetromino.row, curTetromino.col)) {
     MoveTetrominoRight();
+    return false;
   }
+  return true;
 }
 
-void performMoveRight() {
+bool performMoveRight() {
   MoveTetrominoRight();
-  if (Collision(curTetromino, curRow)) {
+  if (Collision(curTetromino, curTetromino.row, curTetromino.col)) {
     MoveTetrominoLeft();
+    return false;
   }
+  return true;
 }
 
 void performHold() {
   HoldTetromino();
 }
 
-// Begin our AI functions
-void AI_play(ALLEGRO_AUDIO_STREAM* music) {
-  int move = rand() % 4;
-  switch (move) {
-    case 1:
-      performDrop();
-      break;
-    case 2:
-      performMoveLeft();
-      break;
-    case 3:
-      performMoveRight();
-      break;
-    case 4:
-      performRotate();
-      break;
+std::vector<std::string> moveList;
 
+int countHolesinColumn(int col) {
+  int holes = 0;
+  for (int i=Rows;i>1;i--) {
+    if (board[i][col] == ' ' && board[i-1][col] != ' ') {
+      holes++;
+    }
+  }
+  return holes;
+}
+
+// Begin our AI functions
+void AI_play(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_FONT* font) {
+  moveList.clear();
+  // Lets try to give this AI some intelligence
+  // Start off by making a list of every possible move for the current piece
+  // The piece can be placed in, at most, 1 of 10 locations.
+  // When rotations are taken into account, there are, at most, 40 possible iterations
+  // For any given piece.
+  // Pieces that only have 2 repeating patterns have fewer iterations.
+  
+  highlight = curTetromino;
+
+  // store possible moves as strings representing a sequence of keypresses
+  // for example one move could be: 'aaw<space>' for left-left-rotate-drop
+  // every move will be stored in a vector of strings moveList
+  float maxDrop[10][4] = {{}};
+  
+  // try every rotation
+  for (int r=0;r<4;r++) {
+    // iterate over every column
+    for (int i=0;i<Cols;i++) {
+      // find top of each column
+      int row = 0;
+      while (!Collision(highlight, row, i)) {
+        row++;
+      }
+      row--;
+      if (row > maxDrop[i][r]) {
+        maxDrop[i][r] = row;
+      }
+    }
+    performRotate(highlight, highlight.row, highlight.col);
+    // performRotate(possible_move, possible_move.row, possible_move.col);
+  }
+  // now we have an array full of column heights, lets try playing in the lowest
+  // height column every time and see what that looks like
+  // we need to figure out how to navigate the piece to the lowest location
+
+
+  // so we found the lowest points, it doesn't really get us too far since there's
+  // no other goals. So let's tell it to leave the fewest total holes
+
+  float numHoles[10][4] = {{}};
+  for (int r=0;r<4;r++) {
+    for (int i=0;i<Cols;i++) {
+      // do this for every col and every rotation
+      float holes = 0;
+      holes += countHolesinColumn(i);
+      numHoles[i][r] = holes;
+    }
+  }
+
+  // now we have 2 groups of data, lets normalize them into one set to find the best move so far
+  float bestMove[10][4] = {};
+  for (int r=0;r<4;r++) {
+    for (int i=0;i<Cols;i++) {
+      bestMove[i][r] = (maxDrop[i][r] * 0.4) + (numHoles[i][r] * 0.6);
+    }
+  }
+
+  int bestMoveVal = 0;
+  int bestMoveCol = 0;
+  int rotations = 0;
+  for (int r=0;r<4;r++) {
+    for (int i=0;i<Cols;i++) {
+      if (bestMove[i][r] > bestMoveVal) {  
+        bestMoveVal = bestMove[i][r];
+        bestMoveCol = i;
+        rotations = r;
+      }  
+    }
+  }
+
+  highlight = curTetromino;
+  for (int i=0;i<rotations;i++) {
+    RotateTetromino(highlight);
+  }
+  highlight.col = bestMoveCol;
+  highlight.row = maxDrop[bestMoveCol][rotations];
+  highlight.color = grey;
+
+  // printf("Moving to column: %d\n Max drop distance: %d\n Rotations needed: %d\n", maxDropCol, maxDropRow, rotations);
+  // minHeight is our new lowest point
+  // we can only move 1 step at a time, so either go left, go right, or drop
+  if (rotations) {
+    performRotate(curTetromino, curTetromino.row, curTetromino.col);
+  }
+  if (bestMoveCol < curTetromino.col) {
+    if (!performMoveLeft()) {
+      performDrop();
+    }
+  } else if (bestMoveCol > curTetromino.col) {
+    if (!performMoveRight()) {
+      performDrop();
+    }
+  } else {
+    performDrop();
   }
 }
 
@@ -612,7 +725,7 @@ int real_main(int argc, char** argv) {
 
   // Timer to control the action speed of the AI player
   // 1.0 / 30.0 = 30 moves per second
-  ALLEGRO_TIMER* ai_timer = al_create_timer(1.0 / 30.0);
+  ALLEGRO_TIMER* ai_timer = al_create_timer(1.0 / 5.0);
   must_init(ai_timer, "ai_timer");
 
   ALLEGRO_EVENT_QUEUE* queue = al_create_event_queue();
@@ -686,7 +799,7 @@ int real_main(int argc, char** argv) {
         // AI timer
         if (ai_move) {
           ai_move = false;
-          AI_play(music);
+          AI_play(music, font);
         }
         redraw = true;   
         break;
@@ -698,7 +811,7 @@ int real_main(int argc, char** argv) {
           case ALLEGRO_KEY_W:
             if (paused || gameover)
               break;
-            performRotate();
+            performRotate(curTetromino, curTetromino.row, curTetromino.col);
           break;
           case ALLEGRO_KEY_S:
             if (paused || gameover)
