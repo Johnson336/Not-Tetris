@@ -290,7 +290,7 @@ void RemoveCompletedRows(ALLEGRO_AUDIO_STREAM* music) {
     clearedRows += numCompletedRows;
     if (clearedRows >= (level * 10)) {
       level++;
-      al_set_audio_stream_speed(music, 1+(level*.005));
+      al_set_audio_stream_speed(music, 1+(level*.01));
     }
   }
 }
@@ -510,6 +510,20 @@ bool performMoveDown(ALLEGRO_AUDIO_STREAM* music) {
   return false;
 }
 
+void performManualMoveDown(ALLEGRO_AUDIO_STREAM* music) {
+  MoveTetrominoDown();
+  if (Collision(curTetromino, curRow)) {
+    MoveTetrominoUp();
+    if (curRow == 0) {
+      return;
+    }
+    CopyToBoard();
+    RemoveCompletedRows(music);
+    NewTetromino();
+  }
+  score++;
+}
+
 void performRotate() {
   RotateTetromino();
   if (Collision(curTetromino, curRow)) {
@@ -687,6 +701,10 @@ int real_main(int argc, char** argv) {
             performRotate();
           break;
           case ALLEGRO_KEY_S:
+            if (paused || gameover)
+              break;
+            performManualMoveDown(music);
+          break;
           case ALLEGRO_KEY_SPACE:
             if (paused || gameover)
               break;
