@@ -10,6 +10,7 @@ const int Cols = 10;
 const int border_width = 1;
 const double frames = 1.0 / 60.0;
 double level_timer = 2.0;
+unsigned char moving_char = '*';
 
 
 // Represents a single block in a Tetromino
@@ -21,8 +22,7 @@ struct Block {
 // Represents a Tetromino piece
 struct Tetromino {
   Block blocks[16];
-  char landedc;
-  char movingc;
+  char c;
   int rotation;
 };
 
@@ -31,31 +31,31 @@ const Tetromino Tetrominoes[7] = {
   {{ {1, 0}, {1, 1}, {1, 2}, {1, 3},
      {0, 2}, {1, 2}, {2, 2}, {3, 2},
      {1, 0}, {1, 1}, {1, 2}, {1, 3},
-     {0, 2}, {1, 2}, {2, 2}, {3, 2} }, 'I', '*', 0},
+     {0, 2}, {1, 2}, {2, 2}, {3, 2} }, 'I', 0},
   {{ {1, 0}, {1, 1}, {1, 2}, {2, 1},
      {0, 1}, {1, 0}, {1, 1}, {2, 1},
      {1, 1}, {2, 0}, {2, 1}, {2, 2},
-     {0, 1}, {1, 1}, {1, 2}, {2, 1} }, 'T', '*', 0},
+     {0, 1}, {1, 1}, {1, 2}, {2, 1} }, 'T', 0},
   {{ {1, 0}, {1, 1}, {1, 2}, {2, 0},
      {0, 0}, {0, 1}, {1, 1}, {2, 1},
      {1, 2}, {2, 0}, {2, 1}, {2, 2},
-     {0, 1}, {1, 1}, {2, 1}, {2, 2} }, 'L', '*', 0},
+     {0, 1}, {1, 1}, {2, 1}, {2, 2} }, 'L', 0},
   {{ {1, 0}, {1, 1}, {1, 2}, {2, 2},
      {0, 1}, {1, 1}, {2, 0}, {2, 1},
      {1, 0}, {2, 0}, {2, 1}, {2, 2},
-     {0, 1}, {0, 2}, {1, 1}, {2, 1} }, 'J', '*', 0},
+     {0, 1}, {0, 2}, {1, 1}, {2, 1} }, 'J', 0},
   {{ {1, 1}, {1, 2}, {2, 0}, {2, 1},
      {0, 0}, {1, 0}, {1, 1}, {2, 1},
      {1, 1}, {1, 2}, {2, 0}, {2, 1},
-     {0, 0}, {1, 0}, {1, 1}, {2, 1} }, 'S', '*', 0},
+     {0, 0}, {1, 0}, {1, 1}, {2, 1} }, 'S', 0},
   {{ {1, 0}, {1, 1}, {2, 1}, {2, 2},
      {0, 2}, {1, 1}, {1, 2}, {2, 1},
      {1, 0}, {1, 1}, {2, 1}, {2, 2},
-     {0, 2}, {1, 1}, {1, 2}, {2, 1} }, 'Z', '*', 0},
+     {0, 2}, {1, 1}, {1, 2}, {2, 1} }, 'Z', 0},
   {{ {1, 1}, {1, 2}, {2, 1}, {2, 2},
      {1, 1}, {1, 2}, {2, 1}, {2, 2},
      {1, 1}, {1, 2}, {2, 1}, {2, 2},
-     {1, 1}, {1, 2}, {2, 1}, {2, 2} }, 'O', '*', 0},
+     {1, 1}, {1, 2}, {2, 1}, {2, 2} }, 'O', 0},
 };
 
 // The board grid
@@ -140,7 +140,7 @@ void ClearScreen() {
   }
 }
 
-void PrintTetromino(Tetromino &t, int y, int x, char c) {
+void PrintTetromino(Tetromino &t, int y, int x, unsigned char c) {
   for (int i = 0;i < 4; i++) {
     Block &b = t.blocks[i + t.rotation];
     mvaddch(y + b.row, x + b.col, c );
@@ -149,7 +149,7 @@ void PrintTetromino(Tetromino &t, int y, int x, char c) {
 
 // Draws the current Tetromino
 void DrawTetromino() {
-  PrintTetromino(curTetromino, border_width + curRow, border_width + curCol, curTetromino.movingc);
+  PrintTetromino(curTetromino, border_width + curRow, border_width + curCol, moving_char);
 }
 
 // Draws the playing board
@@ -202,12 +202,12 @@ void DrawScore() {
   mvprintw(offset_y, offset_x, "Held piece");
   offset_y++;
   if (held) {
-    PrintTetromino(heldTetromino, offset_y, offset_x+1, heldTetromino.movingc);
+    PrintTetromino(heldTetromino, offset_y, offset_x+1, moving_char);
   }
   offset_y+=5;
   mvprintw(offset_y, offset_x, "Next piece");
   offset_y++;
-  PrintTetromino(nextTetromino, offset_y, offset_x+1, nextTetromino.movingc);
+  PrintTetromino(nextTetromino, offset_y, offset_x+1, moving_char);
 
   offset_y+=5;
   mvprintw(offset_y, offset_x, "Score");
@@ -227,7 +227,7 @@ void DrawScore() {
 void CopyToBoard() {
   for (int i=0;i<4;i++) {
     Block &b = curTetromino.blocks[i + curTetromino.rotation];
-    board[curRow + b.row][curCol + b.col] = curTetromino.landedc;
+    board[curRow + b.row][curCol + b.col] = curTetromino.c;
   }
 }
 
