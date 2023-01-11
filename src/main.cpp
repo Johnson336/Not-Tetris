@@ -13,11 +13,63 @@
 #include <allegro5/allegro_audio.h>
 #include <allegro5/allegro_acodec.h>
 
-#include <ncurses.h>
-#include <unistd.h>
-#include <random>
-#include <chrono>
-#include <iostream>
+#include <utility>
+#include <time.h>
+
+
+/*
+TODO:
+
+Game Menus -
+ - Splash screen
+ - Title screen
+-> - Game Menu
+ - High Score Menu
+ - Options Menu
+   - Windowed/Fullscreen
+   - Color Mode
+   - Controls - 
+     - Modify controls
+ - Game Over Menu -
+   - High score name entry
+   - Exit to Menu
+   - New Game
+
+Gameplay - 
+ - Level-based drop speed increase
+ - Game modes -
+   - Powerups
+   - Trash pileup 
+   - Timed Mode
+   - Versus Mode
+   - Chellenge Mode (Preset Obstacle-Filled Levels)
+
+Visual Effects - 
+ - Animate held piece transitions
+ - Animate row clears
+ - Effects for combos - 
+   - Glowing current Tetromino
+
+Sound Effects -
+ - Tetromino landing
+ - Tetromino collision
+ - Tetromino rotate
+ - Tetromino hold
+ - Line clear - 
+   - Single line
+   - Double line
+   - Triple line
+   - Tetris line
+   - Combo Scores - 
+     - Increasing line clear combos
+   - Game over Death Sound
+Pause Music on Pause/During Menus
+
+
+
+
+
+*/
 
 
 
@@ -34,7 +86,10 @@ const int Cols = 10;
 const int border_width = 1;
 const double frames = 1.0 / 60.0;
 double level_timer = 2.0;
-unsigned char moving_char = '*';
+double volume = 1.0;
+
+unsigned int time_ui = static_cast<unsigned int>( time(NULL) );
+
 
 
 const float piece_size = 25.0;
@@ -107,6 +162,15 @@ const Tetromino Tetrominoes[7] = {
      {1, 1}, {1, 2}, {2, 1}, {2, 2} }, 'O', 0, 0, 0, yellow},
 };
 
+/* Initialize functions */
+
+// bool performMoveDown(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_SAMPLE* line_clear, ALLEGRO_SAMPLE* tetromino_land);
+// bool performManualMoveDown(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_SAMPLE* line_clear, ALLEGRO_SAMPLE* tetromino_land);
+bool performDrop();
+bool performMoveRight();
+bool performMoveLeft();
+// bool performRotate(Tetromino &t, int y, int x);
+
 // The board grid
 char board[Rows][Cols];
 
@@ -115,6 +179,7 @@ Tetromino nextTetromino;
 Tetromino curTetromino;
 Tetromino heldTetromino;
 bool held = false;
+bool performedSwap = false;
 unsigned long long score;
 int level;
 int clearedRows;
@@ -122,6 +187,8 @@ bool paused;
 bool redraw;
 bool advanceLogic;
 Tetromino highlight;
+int tetBag[7] = {0, 1, 2, 3, 4, 5, 6};
+int tetBagIter;
 
 // Clears the board
 void ClearBoard() {
@@ -132,16 +199,57 @@ void ClearBoard() {
   }
 }
 
+
+// Pick next tetromino from the bag and remove it
+Tetromino getNextTetromino() {
+  return Tetrominoes[tetBag[tetBagIter++]];
+}
+
+// reshuffle the tet bag and pull one into nextTetromino
+void shuffleTetBag() {
+  // Shuffle Tets to be picked
+  for (int i=0;i<20;i++) {
+    // Swap element 0 with random location 20 times to ensure shuffle
+    // 7/1 + 7/2 + 7/3 + 7/4 + 7/5 + 7/6 + 7/7 = 18.15 shuffles
+    std::swap(tetBag[0], tetBag[(rand() % 6) + 1]);
+  }
+  // reset tetBagIter to 0 so getNextTetromino() will pull the first item
+  tetBagIter = 0;
+  nextTetromino = getNextTetromino();
+}
+
+
+
+// shifts nextTet into curTet and pulls a new nextTet
+void NewTetromino() {
+  performedSwap = false;
+  curTetromino = nextTetromino;
+  curTetromino.row = -1;
+  curTetromino.col = (Cols/3) + 1;
+  // Bag is empty
+  if (tetBagIter >= 6) {
+    shuffleTetBag();
+  } else {
+    // Pick next Tetromino from the bag and remove it
+    nextTetromino = getNextTetromino();
+  }
+
+}
+
+
 // Initializes the board and sets up NCurse
 void Init() {
-  curTetromino = Tetrominoes[rand() % 7];
-  nextTetromino = Tetrominoes[rand() % 7];
+  srand( time_ui );
+  shuffleTetBag();
+  NewTetromino();
+  tetBagIter = 0;
   score = 0;
   level = 1;
   clearedRows = 0;
   paused = false;
   redraw = true;
   advanceLogic = false;
+  performedSwap = false;
   ClearBoard();
 }
 
@@ -200,13 +308,6 @@ void MoveTetrominoUp() {
   curTetromino.row--;
 }
 
-// Generates a new Tetromino
-void NewTetromino() {
-  curTetromino = nextTetromino;
-  nextTetromino = Tetrominoes[rand() % 7];
-  curTetromino.row = 0;
-  curTetromino.col = 4;
-}
 
 // Returns true if the current Tetromino collides with something
 bool Collision(Tetromino &t, int y, int x) {
@@ -225,21 +326,45 @@ bool Collision(Tetromino &t, int y, int x) {
   return false;
 }
 
-void HoldTetromino() {
+bool HoldTetromino() {
+  // Already performed a swap, unable to swap again until next block
+  if (performedSwap)
+    return false;
   // Swap held and current Tetrominos
   if (held) {
-    // only swap if the held piece will fit
-    if (!Collision(heldTetromino, curTetromino.row, curTetromino.col)) {
-      Tetromino temp = heldTetromino;
-      heldTetromino = curTetromino;
-      curTetromino = temp;
+    // Check if held piece will fit
+    // Held piece bumped against a solid surface, try to kick off of it
+      int row = curTetromino.row;
+      int col = curTetromino.col;
+    if (Collision(heldTetromino, row, col)) {
+      // Wall kicks
+      if (!Collision(heldTetromino, row, col + 1)) {
+        return performMoveRight();
+      } else if (!Collision(heldTetromino, row, col - 1)) {
+        return performMoveLeft();
+      } else if (!Collision(heldTetromino, row + 1, col)) {
+        MoveTetrominoDown();
+        return true;
+      }
+      // Unable to find a valid location to satisfy wall kick
+      // Return false swap condition
+      return false;
     }
+    // Swapping in the piece required a wall kick, but it succeeded
+    // Finally swap in the piece
+    std::swap(curTetromino, heldTetromino);
+    // Reset swapped piece to top of screen
+    curTetromino.row = 0;
+    // Only allow one piece swap per block
+    performedSwap = true;
   } else {
     // Put current Tetromino into held and get a new one
+    performedSwap = true;
     held = true;
     heldTetromino = curTetromino;
     NewTetromino();
   }
+  return true;
 }
 
 // Pause and un-pause the game
@@ -255,12 +380,12 @@ void DropTetromino() {
     MoveTetrominoDown();
   }
   if (droppedRows)
-    score += droppedRows-1;
+    score += --droppedRows;
   curTetromino.row--;
 }
 
 // Removes any completed rows
-void RemoveCompletedRows(ALLEGRO_AUDIO_STREAM* music) {
+void RemoveCompletedRows(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_SAMPLE* line_clear) {
   int completedRows[Rows];
   int numCompletedRows = 0;
 
@@ -291,8 +416,20 @@ void RemoveCompletedRows(ALLEGRO_AUDIO_STREAM* music) {
     clearedRows += numCompletedRows;
     if (clearedRows >= (level * 10)) {
       level++;
-      al_set_audio_stream_speed(music, 1+(level*.01));
+      // advanced level, play level_increase sound modified by number
+      // of rows cleared
+      // double speed at level 30
+      al_set_audio_stream_speed(music, 1+(level*(1/30)));
+    } else {
+      // didn't advance level, play line_clear sound modified by number
+      // of rows cleared
+      // twice as fast at 4 row clear vs 1 row clear
+      al_play_sample(line_clear, volume, 0.0, 1.0 + (numCompletedRows * 0.25), ALLEGRO_PLAYMODE_ONCE, NULL);
     }
+  } else {
+    // didn't complete any rows, play tetromino_land sound
+    // play land sound to indicate piece landed
+    // al_play_sample(tetromino_land, 1.0, 0.0, 1.0, ALLEGRO_PLAYMODE_ONCE, NULL);
   }
 }
 
@@ -366,14 +503,11 @@ void drawGrid() {
       gameboard_start_y,
       gameboard_start_x + ( Cols * total_piece_size),
       gameboard_start_y + ( Rows * total_piece_size),
-      grey,
+      white,
       1.0 );
 }
 
-
-
-
-
+// Each piece that has landed on the board gets drawn with a unique color
 void drawBoard() {
   for (int y=0;y<Rows;y++) {
     for (int x=0;x<Cols;x++) {
@@ -435,25 +569,24 @@ void drawTetromino() {
 
 
 void drawScore(ALLEGRO_FONT* font) {
-  drawText("Held Piece", Cols + 2, 1, font, white);
+  drawText("Held Piece", Cols + 1.5, 1, font, white);
   if (held)
-    printTetromino(heldTetromino, Cols + 3, 2);
-  drawText("Next Piece", Cols + 2, 7, font, white);
-  printTetromino(nextTetromino, Cols + 3, 8);
-  drawText("Score", Cols + 2, 13, font, white);
+    printTetromino(heldTetromino, Cols + 2.5, 2);
+  drawText("Next Piece", Cols + 1.5, 7, font, white);
+  printTetromino(nextTetromino, Cols + 2.5, 8);
+  drawText("Score", Cols + 1.5, 13, font, white);
   char outText[20];
   snprintf(outText, 20, "%07llu", score);
-  drawText(outText, Cols + 3, 14, font, white);
-  drawText("Level", Cols + 2, 15, font, white);
+  drawText(outText, Cols + 2.5, 14, font, white);
+  drawText("Level", Cols + 1.5, 15, font, white);
   snprintf(outText, 20, "%d", level);
-  drawText(outText, Cols + 3, 16, font, white);
-  drawText("Lines Cleared", Cols + 2, 17, font, white);
+  drawText(outText, Cols + 2.5, 16, font, white);
+  drawText("Lines Cleared", Cols + 1.5, 17, font, white);
   snprintf(outText, 20, "%d", clearedRows);
-  drawText(outText, Cols + 3, 18, font, white);
-  drawBoxOutline(10.5, 0.0, 9, 6.25, 1.0, white);
-  drawBoxOutline(10.5, 6.5, 9, 5.25, 1.0, white);
-  drawBoxOutline(10.5, 12, 9, 8, 1.0, white);
-  
+  drawText(outText, Cols + 2.5, 18, font, white);
+  drawBoxOutline(Cols + .5, 0.0, 9, 6.25, 1.0, white);
+  drawBoxOutline(Cols + .5, 6.5, 9, 5.25, 1.0, white);
+  drawBoxOutline(Cols + .5, 12, 9, 8, 1.0, white);
 
 }
 
@@ -484,14 +617,14 @@ void drawHighlight() {
 void GameOver(ALLEGRO_FONT* font) {
   
   // Draw Game Over across screen
-  drawBox(0, (Rows/2)-1, 12, 6, black);
-  drawBoxOutline(0, (Rows/2)-1, 12, 6, 1.0, white);
-  drawText("Game Over", 3, Rows/2, font, white);
+  drawBox((Cols/3), (Rows/2)-1, 12, 6, black);
+  drawBoxOutline((Cols/3), (Rows/2)-1, 12, 6, 1.0, white);
+  drawText("Game Over", (Cols/2) + 1, Rows/2, font, white);
   char outText[20];
   snprintf(outText, 20, "%llu", score);
-  drawText("Final Score:", 2, (Rows/2)+1, font, white);
-  drawText(outText, 4, (Rows/2)+2, font, white);
-  drawText("Press [ESC] to exit", 1, (Rows/2) + 4, font, white);
+  drawText("Final Score:", (Cols/2), (Rows/2)+1, font, white);
+  drawText(outText, (Cols/2) + 3, (Rows/2)+2, font, white);
+  drawText("Press [ESC] to exit", (Cols/2) - 1.25, (Rows/2) + 4, font, white);
 }
 
 
@@ -509,7 +642,7 @@ void DrawStuff(ALLEGRO_FONT* font) {
 // perform functions move curTetromino around the game board
 // while receiving boolean feedback whether the action was
 // successfully performed
-bool performMoveDown(ALLEGRO_AUDIO_STREAM* music) {
+bool performMoveDown(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_SAMPLE* line_clear) {
     MoveTetrominoDown();
   if (Collision(curTetromino, curTetromino.row, curTetromino.col)) {
     MoveTetrominoUp();
@@ -517,13 +650,13 @@ bool performMoveDown(ALLEGRO_AUDIO_STREAM* music) {
       return true;
     }
     CopyToBoard();
-    RemoveCompletedRows(music);
+    RemoveCompletedRows(music, line_clear);
     NewTetromino();
   }
   return false;
 }
 
-bool performManualMoveDown(ALLEGRO_AUDIO_STREAM* music) {
+bool performManualMoveDown(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_SAMPLE* line_clear) {
   MoveTetrominoDown();
   if (Collision(curTetromino, curTetromino.row, curTetromino.col)) {
     MoveTetrominoUp();
@@ -531,24 +664,13 @@ bool performManualMoveDown(ALLEGRO_AUDIO_STREAM* music) {
       return false;
     }
     CopyToBoard();
-    RemoveCompletedRows(music);
+    RemoveCompletedRows(music, line_clear);
     NewTetromino();
   }
   score++;
   return true;
 }
 
-bool performRotate(Tetromino &t, int y, int x) {
-  RotateTetromino(t);
-  if (Collision(t, y, x)) {
-    // do some collision checking to slide piece toward center
-    RotateTetromino(t);
-    RotateTetromino(t);
-    RotateTetromino(t);
-    return false;
-  }
-  return true;
-}
 
 bool performDrop() {
   DropTetromino();
@@ -574,11 +696,33 @@ bool performMoveRight() {
   return true;
 }
 
-void performHold() {
-  HoldTetromino();
+bool performRotate(Tetromino &t, int y, int x) {
+  RotateTetromino(t);
+  // Rotated against a solid surface, try to kick off of it
+  if (Collision(t, y, x)) {
+    // Wall kicks
+    if (!Collision(t, y, x+1)) {
+      return performMoveRight();
+    } else if (!Collision(t, y, x-1)) {
+      return performMoveLeft();
+    } else if (!Collision(t, y+1, x)) {
+      MoveTetrominoDown();
+      return true;
+    }
+    // Rotated into a solid surface and can't find a way to 
+    // kick off of it, rotate back to starting position and 
+    // return false rotate condition
+    RotateTetromino(t);
+    RotateTetromino(t);
+    RotateTetromino(t);
+    return false;
+  }
+  return true;
 }
 
-std::vector<std::string> moveList;
+bool performHold() {
+  return HoldTetromino();
+}
 
 int countHolesinColumn(int col) {
   int holes = 0;
@@ -591,8 +735,7 @@ int countHolesinColumn(int col) {
 }
 
 // Begin our AI functions
-void AI_play(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_FONT* font) {
-  moveList.clear();
+void AI_play() {
   // Lets try to give this AI some intelligence
   // Start off by making a list of every possible move for the current piece
   // The piece can be placed in, at most, 1 of 10 locations.
@@ -690,8 +833,10 @@ void AI_play(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_FONT* font) {
   }
 }
 
+
 int real_main(int argc, char** argv) {
   // initialize game-related variables
+  // Shuffle Tet bag and get first Tetromino
   Init();
 
   must_init(al_init(), "Allegro");
@@ -705,32 +850,48 @@ int real_main(int argc, char** argv) {
   must_init(al_init_acodec_addon(), "audio codecs");
   must_init(al_reserve_samples(16), "reserve samples");
 
+  /* Initialize global Allegro structures */
 
-  ALLEGRO_SAMPLE* hammer = al_load_sample("assets/hammer3.wav");
-  must_init(hammer, "hammer");
+  /* Sound Effects */
+  ALLEGRO_SAMPLE* bump = al_load_sample("assets/sounds/bump.wav");
+  must_init(bump, "bump");
+  ALLEGRO_SAMPLE* level_up = al_load_sample("assets/sounds/level_up.wav");
+  must_init(level_up, "level_up");
+  ALLEGRO_SAMPLE* line_clear = al_load_sample("assets/sounds/line_clear.wav");
+  must_init(line_clear, "line_clear");
+  ALLEGRO_SAMPLE* metal_clang = al_load_sample("assets/sounds/metal_clang.wav");
+  must_init(metal_clang, "metal_clang");
+  ALLEGRO_SAMPLE* tetromino_hold = al_load_sample("assets/sounds/tetromino_hold.wav");
+  must_init(tetromino_hold, "tetromino_hold");
+  // ALLEGRO_SAMPLE* tetromino_land = al_load_sample("assets/sounds/tetromino_land.wav");
+  // must_init(tetromino_land, "tetromino_land");
+  ALLEGRO_SAMPLE* tetromino_rotate = al_load_sample("assets/sounds/tetromino_rotate.wav");
+  must_init(tetromino_rotate, "tetromino_rotate");
 
-  
-  ALLEGRO_AUDIO_STREAM* music = al_load_audio_stream("assets/Electro_-Nitro-Fun-New-Game-_Monstercat-Release_.ogg", 2, 2048);
+  /* Music Tracks */
+  ALLEGRO_AUDIO_STREAM* music = al_load_audio_stream("assets/music/Electro_-Nitro-Fun-New-Game-_Monstercat-Release_.ogg", 2, 2048);
   must_init(music, "music");
   al_set_audio_stream_playmode(music, ALLEGRO_PLAYMODE_LOOP);
   al_attach_audio_stream_to_mixer(music, al_get_default_mixer());
+  al_set_audio_stream_gain(music, (volume/2));
 
-  // set our FPS target
+  /* Timers */
   ALLEGRO_TIMER* timer = al_create_timer(1.0 / 60.0);
+  // set our FPS target
   must_init(timer, "timer");
-
-  // Timer to control fall speed
   ALLEGRO_TIMER* tick_timer = al_create_timer(1.0);
+  // Timer to control fall speed
   must_init(tick_timer, "tick_timer");
-
+  ALLEGRO_TIMER* ai_timer = al_create_timer(1.0 / 5.0);
   // Timer to control the action speed of the AI player
   // 1.0 / 30.0 = 30 moves per second
-  ALLEGRO_TIMER* ai_timer = al_create_timer(1.0 / 5.0);
   must_init(ai_timer, "ai_timer");
 
+  /* Allegro System */
   ALLEGRO_EVENT_QUEUE* queue = al_create_event_queue();
   must_init(queue, "queue");
 
+  /* Display options must be set prior to calling al_create_display() */
   al_set_new_display_option(ALLEGRO_SAMPLE_BUFFERS, 1, ALLEGRO_SUGGEST);
   al_set_new_display_option(ALLEGRO_SAMPLES, 8, ALLEGRO_SUGGEST);
   al_set_new_bitmap_flags(ALLEGRO_MIN_LINEAR | ALLEGRO_MAG_LINEAR);
@@ -756,8 +917,7 @@ int real_main(int argc, char** argv) {
   al_register_event_source(queue, al_get_timer_event_source(ai_timer));
   al_register_event_source(queue, al_get_mouse_event_source());
 
-  // create our first tetromino
-  NewTetromino();
+
 
   bool using_ai = false;
   advanceLogic = true;
@@ -790,7 +950,7 @@ int real_main(int argc, char** argv) {
         if (advanceLogic) {
           // game tick logic goes here, pieces drop at fixed rate
           advanceLogic = false;
-          if (performMoveDown(music)) {
+          if (performMoveDown(music, line_clear)) {
             gameover = true;
             redraw = true;
             break;
@@ -799,7 +959,7 @@ int real_main(int argc, char** argv) {
         // AI timer
         if (ai_move) {
           ai_move = false;
-          AI_play(music, font);
+          AI_play();
         }
         redraw = true;   
         break;
@@ -811,12 +971,18 @@ int real_main(int argc, char** argv) {
           case ALLEGRO_KEY_W:
             if (paused || gameover)
               break;
-            performRotate(curTetromino, curTetromino.row, curTetromino.col);
+            if (performRotate(curTetromino, curTetromino.row, curTetromino.col)) {
+              // play rotate sound to indicate successful rotate
+              al_play_sample(tetromino_rotate, volume, 0.0, 1.0, ALLEGRO_PLAYMODE_ONCE, NULL);
+            } else {
+              // play bump sound to indicate failed rotate
+              al_play_sample(bump, volume, 0.0, 1.0, ALLEGRO_PLAYMODE_ONCE, NULL);
+            }
           break;
           case ALLEGRO_KEY_S:
             if (paused || gameover)
               break;
-            performManualMoveDown(music);
+            performManualMoveDown(music, line_clear);
           break;
           case ALLEGRO_KEY_SPACE:
             if (paused || gameover)
@@ -836,7 +1002,13 @@ int real_main(int argc, char** argv) {
           case ALLEGRO_KEY_E:
             if (paused || gameover)
               break;
-            performHold();
+            if (performHold()) {
+              // play hold sound to indicate successful swap
+              al_play_sample(tetromino_hold, volume, 0.0, 1.0, ALLEGRO_PLAYMODE_ONCE, NULL);
+            } else {
+              // play metal_clang sound to indicate failed swap
+              al_play_sample(metal_clang, volume, 0.0, 1.0, ALLEGRO_PLAYMODE_ONCE, NULL);
+            }
           break;
           case ALLEGRO_KEY_Q:
           case ALLEGRO_KEY_ESCAPE:
@@ -844,8 +1016,18 @@ int real_main(int argc, char** argv) {
           break;
           case ALLEGRO_KEY_P:
             Pause();
+            al_set_audio_stream_playing(music, !paused);
             redraw = true;
           break;
+          case ALLEGRO_KEY_M:
+            if (volume) {
+              volume = 0.0;
+            } else {
+              volume = 1.0;
+            }
+            // set music volume to half game volume, or mute completely
+            al_set_audio_stream_gain(music, ((volume>0) ? (volume/2) : (volume)));
+
         }
         break;
       case ALLEGRO_EVENT_DISPLAY_CLOSE:
@@ -876,7 +1058,13 @@ int real_main(int argc, char** argv) {
   al_destroy_timer(tick_timer);
   al_destroy_timer(ai_timer);
   al_destroy_event_queue(queue);
-  al_destroy_sample(hammer);
+  al_destroy_sample(bump);
+  al_destroy_sample(level_up);
+  al_destroy_sample(line_clear);
+  al_destroy_sample(metal_clang);
+  al_destroy_sample(tetromino_hold);
+  // al_destroy_sample(tetromino_land);
+  al_destroy_sample(tetromino_rotate);
   al_destroy_audio_stream(music);
   return 0;
 }
