@@ -16,6 +16,10 @@
 #include <utility>
 #include <time.h>
 
+#include "Individual.hpp"
+
+#include <iostream>
+
 
 /*
 TODO:
@@ -86,7 +90,7 @@ const int Cols = 10;
 const int border_width = 1;
 const double frames = 1.0 / 60.0;
 double level_timer = 2.0;
-double volume = 1.0;
+double volume = 0.0;
 
 unsigned int time_ui = static_cast<unsigned int>( time(NULL) );
 
@@ -171,15 +175,21 @@ bool performMoveRight();
 bool performMoveLeft();
 // bool performRotate(Tetromino &t, int y, int x);
 
+void initialize_AI();
+
 // The board grid
 char board[Rows][Cols];
+
+// The state of the board passed to the AI
+std::string boardState;
 
 // Details of the current Tetromino
 Tetromino nextTetromino;
 Tetromino curTetromino;
 Tetromino heldTetromino;
-bool held = false;
+bool held;
 bool performedSwap = false;
+bool firstRun = true;
 unsigned long long score;
 int level;
 int clearedRows;
@@ -239,18 +249,23 @@ void NewTetromino() {
 
 // Initializes the board and sets up NCurse
 void Init() {
-  srand( time_ui );
   shuffleTetBag();
   NewTetromino();
   tetBagIter = 0;
   score = 0;
   level = 1;
   clearedRows = 0;
+  held = false;
   paused = false;
   redraw = true;
   advanceLogic = false;
   performedSwap = false;
   ClearBoard();
+  if (firstRun) {
+    srand( time_ui );
+    initialize_AI();
+    firstRun = false;
+  }
 }
 
 int increaseScore(int lines) {
@@ -646,21 +661,21 @@ bool performMoveDown(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_SAMPLE* line_clear) {
     MoveTetrominoDown();
   if (Collision(curTetromino, curTetromino.row, curTetromino.col)) {
     MoveTetrominoUp();
-    if (curTetromino.row == 0) {
-      return true;
+    if (curTetromino.row <= 0) {
+      return false;
     }
     CopyToBoard();
     RemoveCompletedRows(music, line_clear);
     NewTetromino();
   }
-  return false;
+  return true;
 }
 
 bool performManualMoveDown(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_SAMPLE* line_clear) {
   MoveTetrominoDown();
   if (Collision(curTetromino, curTetromino.row, curTetromino.col)) {
     MoveTetrominoUp();
-    if (curTetromino.row == 0) {
+    if (curTetromino.row <= 0) {
       return false;
     }
     CopyToBoard();
@@ -734,105 +749,103 @@ int countHolesinColumn(int col) {
   return holes;
 }
 
-// Begin our AI functions
-void AI_play() {
-  // Lets try to give this AI some intelligence
-  // Start off by making a list of every possible move for the current piece
-  // The piece can be placed in, at most, 1 of 10 locations.
-  // When rotations are taken into account, there are, at most, 40 possible iterations
-  // For any given piece.
-  // Pieces that only have 2 repeating patterns have fewer iterations.
-  
-  highlight = curTetromino;
+// declare our AI variables
+std::vector<Individual> population;
+int generation;
+int genIter;
+int actionIter;
 
-  // store possible moves as strings representing a sequence of keypresses
-  // for example one move could be: 'aaw<space>' for left-left-rotate-drop
-  // every move will be stored in a vector of strings moveList
-  float maxDrop[10][4] = {{}};
-  
-  // try every rotation
-  for (int r=0;r<4;r++) {
-    // iterate over every column
-    for (int i=0;i<Cols;i++) {
-      // find top of each column
-      int row = 0;
-      while (!Collision(highlight, row, i)) {
-        row++;
-      }
-      row--;
-      if (row > maxDrop[i][r]) {
-        maxDrop[i][r] = row;
-      }
-    }
-    performRotate(highlight, highlight.row, highlight.col);
-    // performRotate(possible_move, possible_move.row, possible_move.col);
-  }
-  // now we have an array full of column heights, lets try playing in the lowest
-  // height column every time and see what that looks like
-  // we need to figure out how to navigate the piece to the lowest location
-
-
-  // so we found the lowest points, it doesn't really get us too far since there's
-  // no other goals. So let's tell it to leave the fewest total holes
-
-  float numHoles[10][4] = {{}};
-  for (int r=0;r<4;r++) {
-    for (int i=0;i<Cols;i++) {
-      // do this for every col and every rotation
-      float holes = 0;
-      holes += countHolesinColumn(i);
-      numHoles[i][r] = holes;
-    }
-  }
-
-  // now we have 2 groups of data, lets normalize them into one set to find the best move so far
-  float bestMove[10][4] = {};
-  for (int r=0;r<4;r++) {
-    for (int i=0;i<Cols;i++) {
-      bestMove[i][r] = (maxDrop[i][r] * 0.4) + (numHoles[i][r] * 0.6);
-    }
-  }
-
-  int bestMoveVal = 0;
-  int bestMoveCol = 0;
-  int rotations = 0;
-  for (int r=0;r<4;r++) {
-    for (int i=0;i<Cols;i++) {
-      if (bestMove[i][r] > bestMoveVal) {  
-        bestMoveVal = bestMove[i][r];
-        bestMoveCol = i;
-        rotations = r;
-      }  
-    }
-  }
-
-  highlight = curTetromino;
-  for (int i=0;i<rotations;i++) {
-    RotateTetromino(highlight);
-  }
-  highlight.col = bestMoveCol;
-  highlight.row = maxDrop[bestMoveCol][rotations];
-  highlight.color = grey;
-
-  // printf("Moving to column: %d\n Max drop distance: %d\n Rotations needed: %d\n", maxDropCol, maxDropRow, rotations);
-  // minHeight is our new lowest point
-  // we can only move 1 step at a time, so either go left, go right, or drop
-  if (rotations) {
-    performRotate(curTetromino, curTetromino.row, curTetromino.col);
-  }
-  if (bestMoveCol < curTetromino.col) {
-    if (!performMoveLeft()) {
-      performDrop();
-    }
-  } else if (bestMoveCol > curTetromino.col) {
-    if (!performMoveRight()) {
-      performDrop();
-    }
-  } else {
-    performDrop();
+void initialize_AI() {
+  std::cout << "First time AI init\n";
+  // current gen
+  generation = 0;
+  genIter = 0;
+  actionIter = 0;
+ 
+  for (int i=0;i<POPULATION_SIZE;i++) {
+    std::string genome = create_genome();
+    Individual *temp = new Individual(genome);
+    population.push_back(*temp);
   }
 }
 
+
+// Begin our AI function
+void AI_play(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_SAMPLE* line_clear) {
+  char move = population[genIter].chromosome[actionIter++];
+  switch (move) {
+    case 'w':
+      performRotate(curTetromino, curTetromino.row, curTetromino.col);
+      break;
+    case 's':
+      performManualMoveDown(music, line_clear);
+      break;
+    case 'a':
+      performMoveLeft();
+      break;
+    case 'd':
+      performMoveRight();
+      break;
+    case 'e':
+      performHold();
+      break;
+    case 'z':
+      performDrop();
+      break;
+  }
+  if (actionIter >= 10)
+    actionIter = 0;
+
+}
+
+
+
+void AI_create_generation() {
+  actionIter = 0;
+  // sort population in increasing order of fitness
+  sort(population.begin(), population.end(), std::greater<Individual>());
+
+  for (int i=0;i<population.size();i++) {
+    std::cout << "Sorted Population members: " << i << " Str: " << population[i].chromosome << " Fit: " << population[i].fitness << '\n';
+  }
+
+  // Generate new offspring for new generation
+  std::vector<Individual> new_generation;
+
+  // Perform Elitism, take 10% of fittest population
+  // onto the next generation
+  int s = (10 * POPULATION_SIZE) / 100;
+  for (int i=0;i<s;i++) {
+    std::cout << "Pushing member " << i << " onto new gen, fitness: " << population[i].fitness << '\n';
+    new_generation.push_back(population[i]);
+  }
+
+  // From 50% of fittest population, Individuals will 
+  // mate to produce more offspring
+  s = (90 * POPULATION_SIZE) / 100;
+  for (int i=0;i<s;i++) {
+    int len = population.size();
+    int r = random_num(0, 50);
+    Individual parent1 = population[r];
+    r = random_num(0, 50);
+    Individual parent2 = population[r];
+    Individual offspring = parent1.mate(parent2);
+    new_generation.push_back(offspring);
+  }
+
+  population = new_generation;
+  printf("Generation: %d\tString: %s\tFitness: %llu\n", generation, population[0].chromosome.c_str(), population[0].fitness);
+
+  generation++;
+
+}
+void AI_next_iteration() {
+  if (genIter++ >= 100) {
+    genIter = 0;
+    // we tested all of our population, time to pick the best and make a new one
+    AI_create_generation();
+  }
+}
 
 int real_main(int argc, char** argv) {
   // initialize game-related variables
@@ -882,7 +895,7 @@ int real_main(int argc, char** argv) {
   ALLEGRO_TIMER* tick_timer = al_create_timer(1.0);
   // Timer to control fall speed
   must_init(tick_timer, "tick_timer");
-  ALLEGRO_TIMER* ai_timer = al_create_timer(1.0 / 5.0);
+  ALLEGRO_TIMER* ai_timer = al_create_timer(1.0 / 60.0);
   // Timer to control the action speed of the AI player
   // 1.0 / 30.0 = 30 moves per second
   must_init(ai_timer, "ai_timer");
@@ -918,8 +931,14 @@ int real_main(int argc, char** argv) {
   al_register_event_source(queue, al_get_mouse_event_source());
 
 
+  /*
+  turn AI on or off
+  *
+  *
+  */
+  bool using_ai = true;
 
-  bool using_ai = false;
+
   advanceLogic = true;
   redraw = true;
   bool done = false;
@@ -950,7 +969,8 @@ int real_main(int argc, char** argv) {
         if (advanceLogic) {
           // game tick logic goes here, pieces drop at fixed rate
           advanceLogic = false;
-          if (performMoveDown(music, line_clear)) {
+          // Failed to move piece down at top row, game lost
+          if (!performMoveDown(music, line_clear)) {
             gameover = true;
             redraw = true;
             break;
@@ -959,7 +979,7 @@ int real_main(int argc, char** argv) {
         // AI timer
         if (ai_move) {
           ai_move = false;
-          AI_play();
+          AI_play(music, line_clear);
         }
         redraw = true;   
         break;
@@ -1035,17 +1055,24 @@ int real_main(int argc, char** argv) {
         break;
     }
     // Broken out of event switch
-    if (done) {
+    if (done)
       break;
-    }
     
     if (redraw && al_is_event_queue_empty(queue)) {
       redraw = false;
       al_clear_to_color(black);
 
       DrawStuff(font);
-      if (gameover)
-        GameOver(font);
+      
+      // Game ended, print loss screen if a human is playing
+      if (gameover) {
+        if (!using_ai) {
+          GameOver(font);
+        } else {
+          done = true;
+        }
+      }
+        
 
       al_flip_display();
     }
@@ -1066,6 +1093,20 @@ int real_main(int argc, char** argv) {
   // al_destroy_sample(tetromino_land);
   al_destroy_sample(tetromino_rotate);
   al_destroy_audio_stream(music);
+
+  if (using_ai) {
+    std::cout << "AI running generation: " << generation << '\n';
+    // Score the individual on how well it performed.
+    population[genIter].setFitness(score);
+
+    for (int i=0;i<population.size();i++) {
+      std::cout << "Population member: " << i << " Str: " << population[i].chromosome << " Fit: " << population[i].fitness << '\n';
+    }
+    // Advance AI generation
+    AI_next_iteration();
+    // reboot forever if AI is training
+    real_main(argc, argv);
+  }
   return 0;
 }
 
