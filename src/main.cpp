@@ -84,6 +84,13 @@ void must_init(bool test, const char *description) {
   exit(1);
 }
 
+  /*
+  turn AI on or off
+  *
+  *
+  */
+const bool using_ai = true;
+
 
 const int Rows = 20;
 const int Cols = 10;
@@ -176,6 +183,7 @@ bool performMoveLeft();
 // bool performRotate(Tetromino &t, int y, int x);
 
 void initialize_AI();
+void calcNeuronFitness();
 
 // The board grid
 char board[Rows][Cols];
@@ -186,11 +194,13 @@ std::string boardState;
 // Details of the current Tetromino
 Tetromino nextTetromino;
 Tetromino curTetromino;
+int currentTetrominoInt;
 Tetromino heldTetromino;
 bool held;
 bool performedSwap = false;
 bool firstRun = true;
-unsigned long long score;
+int score;
+int prevScore;
 int level;
 int clearedRows;
 bool paused;
@@ -234,6 +244,7 @@ void shuffleTetBag() {
 void NewTetromino() {
   performedSwap = false;
   curTetromino = nextTetromino;
+  currentTetrominoInt = tetBag[tetBagIter];
   curTetromino.row = -1;
   curTetromino.col = (Cols/3) + 1;
   // Bag is empty
@@ -243,7 +254,6 @@ void NewTetromino() {
     // Pick next Tetromino from the bag and remove it
     nextTetromino = getNextTetromino();
   }
-
 }
 
 
@@ -253,6 +263,7 @@ void Init() {
   NewTetromino();
   tetBagIter = 0;
   score = 0;
+  prevScore = 0;
   level = 1;
   clearedRows = 0;
   held = false;
@@ -266,6 +277,7 @@ void Init() {
     initialize_AI();
     firstRun = false;
   }
+  boardState = "";
 }
 
 int increaseScore(int lines) {
@@ -290,9 +302,28 @@ int increaseScore(int lines) {
 
 // Copies the current Tetromino onto the board
 void CopyToBoard() {
+
+  if (using_ai) 
+    calcNeuronFitness();
+
   for (int i=0;i<4;i++) {
     Block &b = curTetromino.blocks[i + curTetromino.rotation];
     board[curTetromino.row + b.row][curTetromino.col + b.col] = curTetromino.c;
+  }
+
+  if (using_ai) {
+    boardState = "";
+    for (int i=0;i<Rows;i++) {
+      for (int j=0;j<Cols;j++) {
+        if (board[i][j] != ' ') {
+          // found topmost row, copy that row into boardState
+          for (int j=0;j<Cols;j++) {
+            boardState += ((board[i][j] != ' ') ? '+' : '-');
+          }
+          return;
+        }
+      }
+    }
   }
 }
 
@@ -591,7 +622,7 @@ void drawScore(ALLEGRO_FONT* font) {
   printTetromino(nextTetromino, Cols + 2.5, 8);
   drawText("Score", Cols + 1.5, 13, font, white);
   char outText[20];
-  snprintf(outText, 20, "%07llu", score);
+  snprintf(outText, 20, "%07d", score);
   drawText(outText, Cols + 2.5, 14, font, white);
   drawText("Level", Cols + 1.5, 15, font, white);
   snprintf(outText, 20, "%d", level);
@@ -636,7 +667,7 @@ void GameOver(ALLEGRO_FONT* font) {
   drawBoxOutline((Cols/3), (Rows/2)-1, 12, 6, 1.0, white);
   drawText("Game Over", (Cols/2) + 1, Rows/2, font, white);
   char outText[20];
-  snprintf(outText, 20, "%llu", score);
+  snprintf(outText, 20, "%d", score);
   drawText("Final Score:", (Cols/2), (Rows/2)+1, font, white);
   drawText(outText, (Cols/2) + 3, (Rows/2)+2, font, white);
   drawText("Press [ESC] to exit", (Cols/2) - 1.25, (Rows/2) + 4, font, white);
@@ -763,16 +794,18 @@ void initialize_AI() {
   actionIter = 0;
  
   for (int i=0;i<POPULATION_SIZE;i++) {
-    std::string genome = create_genome();
-    Individual *temp = new Individual(genome);
+    std::vector<Neuron> brain = std::vector<Neuron>();
+    Individual *temp = new Individual(brain);
     population.push_back(*temp);
   }
 }
 
 
 // Begin our AI function
-void AI_play(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_SAMPLE* line_clear) {
-  char move = population[genIter].chromosome[actionIter++];
+void AI_play(int curTetrominoInt, std::string boardState, ALLEGRO_AUDIO_STREAM* music, ALLEGRO_SAMPLE* line_clear) {
+  Neuron neuron = population[genIter].findNeuron(curTetrominoInt, boardState);
+  char move = neuron.sequence[actionIter++];
+  // printf("Using neuron (%d, %s)\n", neuron.tetrominoInt, neuron.boardState.c_str());
   switch (move) {
     case 'w':
       performRotate(curTetromino, curTetromino.row, curTetromino.col);
@@ -793,11 +826,17 @@ void AI_play(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_SAMPLE* line_clear) {
       performDrop();
       break;
   }
-  if (actionIter >= 10)
+  if (actionIter >= (GENOME_SIZE - 1))
     actionIter = 0;
-
 }
 
+// Called when a piece lands to determine fitness of Neuron
+void calcNeuronFitness() {
+  // AI signal to reset actionIter upon piece landing
+  actionIter = 0;
+  population[genIter].findNeuron(currentTetrominoInt, boardState).calcFitness(score, prevScore);
+  prevScore = score;
+}
 
 
 void AI_create_generation() {
@@ -834,13 +873,13 @@ void AI_create_generation() {
   }
 
   population = new_generation;
-  printf("Generation: %d\tString: %s\tFitness: %llu\n", generation, population[0].chromosome.c_str(), population[0].fitness);
+  printf("Generation: %d\tFitness: %d\tNeurons: %lu\n", generation, population[0].fitness, population[0].brain.size());
 
   generation++;
 
 }
 void AI_next_iteration() {
-  if (genIter++ >= 100) {
+  if (genIter++ >= (POPULATION_SIZE - 1)) {
     genIter = 0;
     // we tested all of our population, time to pick the best and make a new one
     AI_create_generation();
@@ -931,14 +970,6 @@ int real_main(int argc, char** argv) {
   al_register_event_source(queue, al_get_mouse_event_source());
 
 
-  /*
-  turn AI on or off
-  *
-  *
-  */
-  bool using_ai = true;
-
-
   advanceLogic = true;
   redraw = true;
   bool done = false;
@@ -979,7 +1010,7 @@ int real_main(int argc, char** argv) {
         // AI timer
         if (ai_move) {
           ai_move = false;
-          AI_play(music, line_clear);
+          AI_play(currentTetrominoInt, boardState, music, line_clear);
         }
         redraw = true;   
         break;
@@ -1097,10 +1128,12 @@ int real_main(int argc, char** argv) {
   if (using_ai) {
     std::cout << "AI running generation: " << generation << '\n';
     // Score the individual on how well it performed.
-    population[genIter].setFitness(score);
+
+    // set the fitness for an individual equal to the sum of its neurons' fitness
+    population[genIter].calc_fitness();
 
     for (int i=0;i<population.size();i++) {
-      std::cout << "Population member: " << i << " Str: " << population[i].chromosome << " Fit: " << population[i].fitness << '\n';
+      printf("Population member: %d\tFitness: %d\tNeurons: %lu\n", i, population[i].fitness, population[i].brain.size());
     }
     // Advance AI generation
     AI_next_iteration();
