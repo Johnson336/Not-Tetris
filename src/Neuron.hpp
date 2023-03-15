@@ -44,7 +44,7 @@ class Neuron {
         char tetrominoShape;
         std::string boardState;
         Neuron(char tetrominoShape, std::string &boardState);
-        void calcFitness(int, int);
+        void calcFitness(int, int, int, int);
         void setFitness(int);
         void setSequence(std::string sequence);
 
@@ -73,8 +73,37 @@ void Neuron::setSequence(std::string sequence) {
 void Neuron::setFitness(int i) {
     this->fitness = i;
 }
-void Neuron::calcFitness(int score, int prevScore) {
-    this->fitness = (score - prevScore);
+void Neuron::calcFitness(int score, int prevScore, int holes, int prevHoles) {
+    int filledHoles = prevHoles - holes;
+    // filling holes gives positive number
+    // filledHoles range is -4 <-> 4
+    // a great move would be a 4
+    // terrible move would be a -4
+    // therefore our fitness becomes subScore * ((filledHoles + 4) / 4)
+    // filledHoles
+    // -----------
+    // -4 = 0.00
+    // -3 = 0.25
+    // -2 = 0.50
+    // -1 = 0.75
+    //  0 = 1.00
+    //  1 = 1.25
+    //  2 = 1.50
+    //  3 = 1.75
+    //  4 = 2.00
+    int subScore = (score - prevScore);
+    float holesAdjust = (((float)filledHoles + 4.0) / 4.0);
+    printf("holes: %d prevHoles: %d holesAdjust: %0.2f\n", holes, prevHoles, holesAdjust);
+    this->fitness = (subScore * holesAdjust);
+    printf("Neuron score: %d\n", this->fitness);
+}
+
+bool operator<(const Neuron &ind1, const Neuron &ind2) {
+    return (ind1.fitness < ind2.fitness);
+}
+
+bool operator>(const Neuron &ind1, const Neuron &ind2) {
+    return (ind1.fitness > ind2.fitness);
 }
 
 // Overload == operator for equality checks

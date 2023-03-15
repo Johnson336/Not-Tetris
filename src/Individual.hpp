@@ -44,18 +44,15 @@ std::string create_genome() {
 class Individual {
     public:
         std::vector<Neuron> brain;
-        float fitness; // fitness is now an average
+        int fitness; // fitness is now an average
         Individual(std::vector<Neuron> &brain);
         Individual mate(Individual &parent2);
         void calc_fitness();
-        void setFitness(float);
-        Neuron findNeuron(char tetrominoShape, std::string &boardState);
+        void setFitness(int);
 };
 
-extern std::vector<Individual> population;
 
-
-Neuron Individual::findNeuron(char tetrominoShape, std::string &boardState) {
+Neuron findNeuron(std::vector<Individual> &population, char tetrominoShape, std::string &boardState) {
     /*
     // check our brain to see if a neuron for this piece and boardState exists
     for (int i=0;i<this->brain.size();i++) {
@@ -109,33 +106,45 @@ Neuron probability_pick_neuron(Neuron &n1, Neuron &n2) {
 }
 
 Individual Individual::mate(Individual &parent2) {
-    float CROSSOVER_RATE = 0.7;
+    float crossover_rate = 0.9;
+    float mutation_rate = 0.1;
     int gene_length = this->brain.size();
     int gene_lenght2 = parent2.brain.size();
     const auto& p1 = this->brain.begin();
     const auto& p2 = parent2.brain.begin();
     std::vector<Neuron> child_brain;
     
-    for (auto i : this->brain) {
-        for (auto j : parent2.brain) {
-            if (i == j) {
-                if ((float)rand() / RAND_MAX < CROSSOVER_RATE) {
-                    // inherit best neuron from parents
-                    if (i.fitness > j.fitness) {
-                        child_brain.push_back(i);
-                    } else {
-                        child_brain.push_back(j);
-                    }
-                    break;
+    for (auto mother_neuron : this->brain) {
+        for (auto father_neuron : parent2.brain) {
+            if (mother_neuron == father_neuron) {
+                // compare like neurons
+                float crossover = (float)rand() / RAND_MAX;
+                if (crossover < crossover_rate) {
+                    // inherit better neuron
+                    child_brain.push_back((mother_neuron > father_neuron) ? mother_neuron : father_neuron);
                 } else {
-                    // generate random neuron
-                    Neuron newNeuron = Neuron(i.tetrominoShape, i.boardState);
-                    newNeuron.setSequence(create_genome());
-                    child_brain.push_back(newNeuron);
+                    // inherit worse neuron
+                    child_brain.push_back((mother_neuron < father_neuron) ? mother_neuron : father_neuron);
                 }
+                break;
             }
         }
+        // choose whether to copy over the unique mother neurons or mutate
+        float mutation = (float)rand() / RAND_MAX;
+        if (mutation < mutation_rate) {
+            // mutate a new neuron
+            Neuron newNeuron = Neuron(mother_neuron.tetrominoShape, mother_neuron.boardState);
+            child_brain.push_back(newNeuron);
+        } else if (mutation < crossover_rate) {
+            // pass on mother neuron unchanged
+            child_brain.push_back(mother_neuron);
+        }
     }
+    sort(child_brain.begin(), child_brain.end(), std::greater<Neuron>());
+    // sort and cut off the lowest 30% of neurons to trim the fat
+    int attritionIndex = child_brain.size() * 0.7;
+    child_brain.erase(child_brain.begin()+attritionIndex, child_brain.end());
+
     return Individual(child_brain);
 
 }
@@ -162,7 +171,7 @@ void crossover(Individual& parent1, Individual& parent2, Individual& child1, Ind
 }
 
 
-void Individual::setFitness(float i) {
+void Individual::setFitness(int i) {
     this->fitness = i;
 }
 
@@ -172,12 +181,12 @@ void Individual::calc_fitness() {
     // Fitness of an individual is the average of the fitness 
     // of all of its neurons
     int totalFit = 0;
-    float newFit = 0;
+    int newFit = 0;
     for (int i=0;i<this->brain.size();i++) {
         totalFit += this->brain[i].fitness;
     }
-    newFit = float(totalFit / this->brain.size());
-    printf("Fitness: %d / %lu = %f\n", totalFit, this->brain.size(), newFit);
+    newFit = totalFit / this->brain.size();
+    printf("Fitness: %d / %lu = %d\n", totalFit, this->brain.size(), newFit);
     this->fitness = newFit;
 }
 
