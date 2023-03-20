@@ -89,7 +89,7 @@ void must_init(bool test, const char *description) {
   *
   *
   */
-const bool using_ai = true;
+bool using_ai = true;
 
 
 const int Rows = 20;
@@ -112,7 +112,7 @@ const int gameboard_width = (total_piece_size * Cols);
 const int gameboard_height = (total_piece_size * Rows);
 
 const int window_max_x = gameboard_width + 350;
-const int window_max_y = gameboard_height + 100;
+const int window_max_y = gameboard_height + 150;
 
 ALLEGRO_COLOR cyan = al_map_rgb(0, 255, 255);
 ALLEGRO_COLOR yellow = al_map_rgb(255, 255, 0);
@@ -203,6 +203,7 @@ int height;
 int prevHeight;
 int level;
 int clearedRows;
+bool gameover;
 bool paused;
 bool redraw;
 bool advanceLogic;
@@ -214,6 +215,7 @@ void initialize_AI();
 void calcNeuronFitness();
 void getBoardState();
 void assignNewNeuron();
+void createMap(std::map<std::string, char> *um);
 
 // The state of the board passed to the AI
 std::string boardState;
@@ -224,6 +226,13 @@ Neuron currentNeuron = Neuron(curTetrominoShape, boardState);
 int generation;
 int genIter;
 int actionIter;
+int bestFit;
+std::vector<int> highScores;
+
+// create map between binary and its
+// equivalent hex code
+std::map<std::string, char> bin_hex_map;
+   
 
 // Clears the board
 void ClearBoard() {
@@ -285,6 +294,7 @@ void Init() {
   height = 0;
   prevHeight = Rows;
   level = 1;
+  gameover = false;
   clearedRows = 0;
   held = false;
   paused = false;
@@ -299,6 +309,9 @@ void Init() {
     srand( time_ui );
     initialize_AI();
     firstRun = false;
+    bestFit = 0;
+    // create our bin to hex map
+    createMap(&bin_hex_map);
   }
   if (using_ai) {
     getBoardState();
@@ -326,19 +339,40 @@ int increaseScore(int lines) {
   }
 }
 
+// Function to create map between binary
+// number and its equivalent hexadecimal
+void createMap(std::map<std::string, char> *um) {
+    (*um)["0000"] = '0';
+    (*um)["0001"] = '1';
+    (*um)["0010"] = '2';
+    (*um)["0011"] = '3';
+    (*um)["0100"] = '4';
+    (*um)["0101"] = '5';
+    (*um)["0110"] = '6';
+    (*um)["0111"] = '7';
+    (*um)["1000"] = '8';
+    (*um)["1001"] = '9';
+    (*um)["1010"] = 'A';
+    (*um)["1011"] = 'B';
+    (*um)["1100"] = 'C';
+    (*um)["1101"] = 'D';
+    (*um)["1110"] = 'E';
+    (*um)["1111"] = 'F';
+} 
+
+
 void getBoardState() {
+  std::string boardBinary = "";
   boardState = "";
   for (int i=0;i<Rows;i++) {
     for (int j=0;j<Cols;j++) {
-      if (board[i][j] != ' ') {
-        // found topmost row, copy that row into boardState
-        for (int j=0;j<Cols;j++) {
-          boardState += ((board[i][j] != ' ') ? '+' : '-');
-        }
-        return;
-      }
+      boardBinary += ((board[i][j] == ' ') ? '0' : '1');
     }
   }
+  for (int i=0;i<boardBinary.size()-3;i+=4) {
+    boardState += bin_hex_map[boardBinary.substr(i, 4)];
+  }
+  // printf("boardBinary: %s (%lu) boardState: %s (%lu)\n", boardBinary.c_str(), boardBinary.length(), boardState.c_str(), boardState.length());
 }
 
 // Copies the current Tetromino onto the board
@@ -511,7 +545,7 @@ void RemoveCompletedRows(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_SAMPLE* line_clear
 }
 
 int gameboard_start_x = 50;
-int gameboard_start_y = 50;
+int gameboard_start_y = 100;
 
 // Draws a solid color box using col/row (float) coordinates
 // for finer precision
@@ -669,18 +703,19 @@ void drawScore(ALLEGRO_FONT* font) {
 // draw stats about AI
 void drawAIStats(ALLEGRO_FONT* font) {
   char outText[20];
+  drawText("--AI Learning--", (Cols/2), -2, font, white);
   drawText("AI Gen:", (Cols/2) - 5, -1, font, white);
-  snprintf(outText, 20, "%d", generation);
+  snprintf(outText, 20, "%d", generation+1);
   drawText(outText, (Cols / 2) - 1, -1, font, white);
   drawText("Member: ", (Cols / 2) + 1, -1, font, white);
   snprintf(outText, 20, "%d", genIter);
   drawText(outText, (Cols / 2) + 5, -1, font, white);
-  drawText("Fit: ", (Cols / 2) + 7, -1, font, white);
-  snprintf(outText, 20, "%d", population[genIter].fitness);
-  drawText(outText, (Cols / 2) + 10, -1, font, white);
-  drawText("Neuron: ", (Cols / 2) - 5, 21, font, white);
-  snprintf(outText, 20, "%c + %s", curTetrominoShape, currentNeuron.boardState.c_str());
-  drawText(outText, (Cols / 2) - 1, 21, font, white);
+  drawText("HiScore: ", (Cols / 2) + 7, -1, font, white);
+  snprintf(outText, 20, "%d", bestFit);
+  drawText(outText, (Cols / 2) + 12, -1, font, white);
+  // drawText("Neuron: ", (Cols / 2) - 5, 20.5, font, white);
+  // snprintf(outText, 20, "%c + %s", curTetrominoShape, currentNeuron.boardState.c_str());
+  // drawText(outText, (Cols / 2) - 1, 20.5, font, white);
 }
 
 void drawPaused(ALLEGRO_FONT* font) {
@@ -854,20 +889,21 @@ int getMaxHeight() {
   return Rows;
 }
 
-
 void initialize_AI() {
   std::cout << "First time AI init\n";
   // current gen
   generation = 0;
   genIter = 0;
   actionIter = 0;
+
+  highScores = std::vector<int>();
  
   for (int i=0;i<POPULATION_SIZE;i++) {
     std::vector<Neuron> brain = std::vector<Neuron>();
     Individual temp = Individual(brain);
     population.push_back(temp);
   }
-  currentNeuron = findNeuron(population, curTetrominoShape, boardState);
+  currentNeuron = population[genIter].findNeuron(curTetrominoShape, boardState);
 }
 
 
@@ -956,17 +992,15 @@ void remove(std::vector<Neuron> &v, const Neuron &target) {
 }
 
 void assignNewNeuron() {
-  if (using_ai) {
-    // we don't want to store useless neurons
-    if (currentNeuron.fitness > 0) {
-      // erase any duplicates of the current Neuron
-      remove(population[genIter].brain, currentNeuron);
-      // store current Neuron
-      population[genIter].brain.push_back(currentNeuron);
-    }
-    // get new Neuron from boardstate
-    currentNeuron = findNeuron(population, curTetrominoShape, boardState);
+  // we don't want to store useless neurons
+  if (currentNeuron.fitness > 0) {
+    // erase any duplicates of the current Neuron
+    remove(population[genIter].brain, currentNeuron);
+    // store current Neuron
+    population[genIter].brain.push_back(currentNeuron);
   }
+  // get new Neuron from boardstate
+  currentNeuron = population[genIter].findNeuron(curTetrominoShape, boardState);
 }
 
 void AI_create_generation() {
@@ -1008,7 +1042,7 @@ void AI_create_generation() {
   }
 
   population = new_generation;
-  printf("Generation: %d\tFitness: %d\tNeurons: %lu\n", generation, population[0].fitness, population[0].brain.size());
+  printf("Generation: %d\tFitness: %d\tNeurons: %lu\n", generation+1, population[0].fitness, population[0].brain.size());
 
   generation++;
 
@@ -1016,8 +1050,43 @@ void AI_create_generation() {
 void AI_next_iteration() {
   if (genIter++ >= (POPULATION_SIZE - 1)) {
     genIter = 0;
+
+    // store high score for this generation
+    highScores.push_back(bestFit);
+    bestFit = 0;
+
+    // print high scores
+    printf("High Scores:\n");
+    for (int i=0;i<highScores.size();i++) {
+      printf("\tGen: %d\tHigh Score: %d\n", i+1, highScores[i]);
+    }
+
     // we tested all of our population, time to pick the best and make a new one
     AI_create_generation();
+  }
+}
+
+void soft_reset() {
+  if (using_ai) {
+    std::cout << "AI running generation: " << generation << '\n';
+    // Score the individual on how well it performed.
+
+    // set the fitness for an individual equal to the sum of its neurons' fitness
+    population[genIter].setFitness(score);
+
+    // update best high score
+    if (score > bestFit) {
+      bestFit = score;
+    }
+
+    for (int i=0;i<population.size();i++) {
+      printf("Population member: %d\tFitness: %d\tNeurons: %lu\n", i+1, population[i].fitness, population[i].brain.size());
+    }
+    // Advance AI generation
+    AI_next_iteration();
+    // reboot forever if AI is training
+    // real_main(argc, argv);
+    Init();
   }
 }
 
@@ -1109,7 +1178,6 @@ int real_main(int argc, char** argv) {
   advanceLogic = true;
   redraw = true;
   bool done = false;
-  bool gameover = false;
   paused = false;
   bool ai_move = false;
   ALLEGRO_EVENT event;
@@ -1120,7 +1188,7 @@ int real_main(int argc, char** argv) {
   al_start_timer(tick_timer);
   al_start_timer(ai_timer);
 
-  while (!done) {
+  while (1) {
     al_wait_for_event(queue, &event);
 
     switch (event.type) {
@@ -1234,6 +1302,9 @@ int real_main(int argc, char** argv) {
             ai_timer = al_create_timer(1.0 / ai_timer_mps);
             al_start_timer(ai_timer);
           break;
+          case ALLEGRO_KEY_L:
+            using_ai = !using_ai;
+          break;
         }
         break;
       case ALLEGRO_EVENT_DISPLAY_CLOSE:
@@ -1252,10 +1323,11 @@ int real_main(int argc, char** argv) {
       
       // Game ended, print loss screen if a human is playing
       if (gameover) {
-        if (!using_ai) {
-          GameOver(font);
+        if (using_ai) {
+          soft_reset();
+          // done = true;
         } else {
-          done = true;
+          GameOver(font);
         }
       }
         
@@ -1281,21 +1353,6 @@ int real_main(int argc, char** argv) {
   al_destroy_sample(tetromino_rotate);
   al_destroy_audio_stream(music);
 
-  if (using_ai) {
-    std::cout << "AI running generation: " << generation << '\n';
-    // Score the individual on how well it performed.
-
-    // set the fitness for an individual equal to the sum of its neurons' fitness
-    population[genIter].setFitness(score);
-
-    for (int i=0;i<population.size();i++) {
-      printf("Population member: %d\tFitness: %d\tNeurons: %lu\n", i, population[i].fitness, population[i].brain.size());
-    }
-    // Advance AI generation
-    AI_next_iteration();
-    // reboot forever if AI is training
-    real_main(argc, argv);
-  }
   return 0;
 }
 

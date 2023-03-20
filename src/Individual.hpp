@@ -47,12 +47,13 @@ class Individual {
         int fitness; // fitness is now an average
         Individual(std::vector<Neuron> &brain);
         Individual mate(Individual &parent2);
+        Neuron findNeuron(char tetrominoShape, std::string &boardState);
         void calc_fitness();
         void setFitness(int);
 };
 
 
-Neuron findNeuron(std::vector<Individual> &population, char tetrominoShape, std::string &boardState) {
+Neuron Individual::findNeuron(char tetrominoShape, std::string &boardState) {
     /*
     // check our brain to see if a neuron for this piece and boardState exists
     for (int i=0;i<this->brain.size();i++) {
@@ -69,16 +70,10 @@ Neuron findNeuron(std::vector<Individual> &population, char tetrominoShape, std:
     return newNeuron;
     */
    // select best Neuron out of all our brains
-    int maxFit = 0;
     Neuron bestNeuron = Neuron(tetrominoShape, boardState);
-    for (auto individual : population) {
-        for (auto neuron : individual.brain) {
-            if (neuron.tetrominoShape == tetrominoShape && neuron.boardState == boardState) {
-                if (neuron.fitness > maxFit) {
-                    maxFit = neuron.fitness;
-                    bestNeuron = neuron;
-                }
-            }
+    for (Neuron neuron : this->brain) {
+        if (neuron.tetrominoShape == tetrominoShape && neuron.boardState == boardState) {
+            return neuron;
         }
     }
     return bestNeuron;
