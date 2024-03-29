@@ -1,0 +1,42 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/clang++",
+      "-c",
+      "-mmacosx-version-min=12.6",
+      "-O3",
+      "-std=c++17",
+      "-ggdb",
+      "-I/usr/local/include",
+      "-rpath",
+      "/usr/local/lib",
+      "-Iinclude",
+      "-o",
+      "bin/main",
+      "src/Game.cpp"
+    ],
+    "directory": "/Users/colen/Documents/Code/VSCode/cpp/Not-Tetris-Command-Line",
+    "file": "/Users/colen/Documents/Code/VSCode/cpp/Not-Tetris-Command-Line/src/Game.cpp",
+    "output": "/Users/colen/Documents/Code/VSCode/cpp/Not-Tetris-Command-Line/bin/main"
+  },
+  {
+    "arguments": [
+      "/usr/bin/clang++",
+      "-c",
+      "-mmacosx-version-min=12.6",
+      "-O3",
+      "-std=c++17",
+      "-ggdb",
+      "-I/usr/local/include",
+      "-rpath",
+      "/usr/local/lib",
+      "-Iinclude",
+      "-o",
+      "bin/main",
+      "src/main.cpp"
+    ],
+    "directory": "/Users/colen/Documents/Code/VSCode/cpp/Not-Tetris-Command-Line",
+    "file": "/Users/colen/Documents/Code/VSCode/cpp/Not-Tetris-Command-Line/src/main.cpp",
+    "output": "/Users/colen/Documents/Code/VSCode/cpp/Not-Tetris-Command-Line/bin/main"
+  }
+]

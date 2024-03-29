@@ -2,28 +2,40 @@
 #define __INDIVIDUALHPP
 
 #include <random>
-#include "Neuron.hpp"
 #include <map>
+#include <sqlite3.h>
+#include <sstream>
+
 
 // Number of individuals in each generation
-#define POPULATION_SIZE 50
-#define GENOME_SIZE 20
+#define POPULATION_SIZE 1
+#define GENOME_SIZE 1
 
 // Valid Genes -- Possible Moves
-extern const std::string GENES;
+const int NUM_GENES = 5;
+const std::string GENES = "wsadz";
+std::unordered_map<char, int> gene_index = {{'w',0},{'s',1},{'a',2},{'d',3},{'z',4}};
 /*
     w = rotate
     s = soft drop
     a = move left
     d = move right
-    e = hold piece // currently disabled for AI
     z = drop piece
+    e = hold piece // currently disabled for AI
 */
 
-const unsigned long long TARGET = 100000; // score we want to reach
-
 // Generate random numbers in a range
-extern int random_num(int start, int end);
+int random_num(int start, int end) {
+  int range = (end-start)+1;
+  int random_int = start+(rand()%range);
+  return random_int;
+}
+
+// Create random gene for movement
+char create_gene() {
+    return GENES.at(random_num(0, NUM_GENES-1));
+}
+
 
 // Create random genes for mutation
 char mutated_genes() {
@@ -43,161 +55,233 @@ std::string create_genome() {
 // Class representing an Individual of a population
 class Individual {
     public:
-        std::vector<Neuron> brain;
-        int fitness; // fitness is now an average
-        Individual(std::vector<Neuron> &brain);
+        // Individual brain is a map of string keys to int[NUM_GENES] array
+        // This holds the value of each move that we can take for a specific
+        // Board state
+        sqlite3 *db;
+        // Take an existing database and create an Individual with it
+        Individual(sqlite3 *database); 
+        std::unordered_map<std::string, std::vector<float>> brain;
+        // Take an existing brain as an argument and create an individual with it
+        Individual(std::unordered_map<std::string, std::vector<float>> &brain);
+        // This Individual performs mating with another Individual parameter
         Individual mate(Individual &parent2);
-        Neuron findNeuron(char tetrominoShape, std::string &boardState);
-        void calc_fitness();
-        void setFitness(int);
+        // Find the map for a given board state and return the int array of values
+        std::vector<float> &findMap(std::string &state);
+        // Find the map for a given board state and return the value of the given action
+        int getMoveValue(std::string &state, char action);
+        // Store the value of an action for a given state
+        void storeMoveValue(std::string &state, char action, float value);
+        // find the best action to perform for a given board state
+        char getBestAction(std::string &state, int chance, int theshold);
+        // get total nodes in the database
+        int getNodeCount();
 };
 
 
-Neuron Individual::findNeuron(char tetrominoShape, std::string &boardState) {
-    /*
-    // check our brain to see if a neuron for this piece and boardState exists
-    for (int i=0;i<this->brain.size();i++) {
-        if (this->brain[i].tetrominoShape == tetrominoShape && this->brain[i].boardState == boardState) {
-            // printf("Loaded existing neuron: %s fit: %d\n", this->brain[i].sequence.c_str(), this->brain[i].fitness);
-            return this->brain[i];
-        }
-    }
-    // couldn't find an existing neuron, make a new one
-    Neuron newNeuron = Neuron(tetrominoShape, boardState);
-    // Don't store the neuron until it's been scored in game loop
-    // this->brain.push_back(newNeuron);
-    // printf("Grew new neuron: %s\n", newNeuron.sequence.c_str());
-    return newNeuron;
-    */
-   // select best Neuron out of all our brains
-    Neuron bestNeuron = Neuron(tetrominoShape, boardState);
-    for (Neuron neuron : this->brain) {
-        if (neuron.tetrominoShape == tetrominoShape && neuron.boardState == boardState) {
-            return neuron;
-        }
-    }
-    return bestNeuron;
+std::vector<float> &Individual::findMap(std::string &state) {
+  // get back an array of movement values for a given state
+  std::unordered_map<std::string, std::vector<float>>::iterator it = this->brain.find(state);
+  if (it == this->brain.end()) {
+    this->brain[state] = std::vector<float>{0,0,0,0,0};
+  }
+  return this->brain[state];
 }
 
-Individual::Individual(std::vector<Neuron> &brain) {
+Individual::Individual(std::unordered_map<std::string, std::vector<float>> &brain) {
     this->brain = brain;
-    this->fitness = 0;
-    // We don't know fitness until we've played a game
-    // fitness = calc_fitness();
 };
 
-Neuron probability_pick_neuron(Neuron &n1, Neuron &n2) {
-    float p = random_num(0, 100) / 100;
-    if (p < 0.45) {
-        // 45% chance to pick parent 1
-        return n1;
-    } else if (p < 0.90) {
-        // 45% chance to pick parent 2
-        return n2;
-    } else {
-        // 10% chance to generate a new neuron for diversity
-        return Neuron(n1.tetrominoShape, n1.boardState);
+Individual::Individual(sqlite3 *database) {
+  this->db = database;
+}
+
+int Individual::getMoveValue(std::string &state, char action) {
+  std::vector<float> neuron = findMap(state);
+  return neuron[gene_index[action]];
+}
+
+void Individual::storeMoveValue(std::string &state, char action, float newValue) {
+  sqlite3 *db = this->db;
+  char* errMsg = nullptr;
+
+  std::string createTableQuery = "CREATE TABLE IF NOT EXISTS brain (key TEXT PRIMARY KEY, value TEXT);";
+  sqlite3_exec(db, createTableQuery.c_str(), nullptr, 0, &errMsg);
+  // get our action index
+  int index = gene_index[action];
+  //printf("storing value %2.2f at char %c index %d\n", newValue, action, index);
+
+  // check if the key exists in database and retrieve the vector of floats if it does
+  std::vector<float> values;
+  std::string selectQuery = "SELECT value FROM brain WHERE key='" + state + "';";
+  sqlite3_stmt *stmt;
+  int rc = sqlite3_prepare_v2(db, selectQuery.c_str(), -1, &stmt, nullptr);
+  if (rc == SQLITE_OK) {
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+      std::string value(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0)));
+
+      // parse the string and convert it into a vector of floats
+      std::istringstream iss(value);
+      std::string numStr;
+      while (getline(iss, numStr, ',')) {
+        float f = stof(numStr);
+        values.push_back(f);
+      }
     }
-}
+  }
+  sqlite3_finalize(stmt);
+  // update the vector index with the new parameter value
+  if (values.empty()) {
+    values = {0,0,0,0,0};
+  }
+  if (newValue != values[index]) {
+    //printf("Updating move %c value %2.2f with new value %2.2f\n", action, values[index], (values[index] + newValue) / 2);
+    //values[index] = std::fmaxf(values[index], newValue);
+    // update move value with new sequence value
+    // average the existing value together with the new Value
+    //if (newValue > 20) {
+    //  printf("state[%s][%c]=%2.2f\n", state.c_str(), action, newValue);
+    //}
+    values[index] = newValue;
+  }
 
-Individual Individual::mate(Individual &parent2) {
-    float crossover_rate = 0.9;
-    float mutation_rate = 0.1;
-    int gene_length = this->brain.size();
-    int gene_lenght2 = parent2.brain.size();
-    const auto& p1 = this->brain.begin();
-    const auto& p2 = parent2.brain.begin();
-    std::vector<Neuron> child_brain;
-    
-    for (auto mother_neuron : this->brain) {
-        for (auto father_neuron : parent2.brain) {
-            if (mother_neuron == father_neuron) {
-                // compare like neurons
-                float crossover = (float)rand() / RAND_MAX;
-                if (crossover < crossover_rate) {
-                    // inherit better neuron
-                    child_brain.push_back((mother_neuron > father_neuron) ? mother_neuron : father_neuron);
-                } else {
-                    // inherit worse neuron
-                    child_brain.push_back((mother_neuron < father_neuron) ? mother_neuron : father_neuron);
-                }
-                break;
-            }
-        }
-        // choose whether to copy over the unique mother neurons or mutate
-        float mutation = (float)rand() / RAND_MAX;
-        if (mutation < mutation_rate) {
-            // mutate a new neuron
-            Neuron newNeuron = Neuron(mother_neuron.tetrominoShape, mother_neuron.boardState);
-            child_brain.push_back(newNeuron);
-        } else if (mutation < crossover_rate) {
-            // pass on mother neuron unchanged
-            child_brain.push_back(mother_neuron);
-        }
+  // convert vector of floats into comma-separated string for storage
+  std::ostringstream oss;
+  for (int i=0;i<values.size();i++) {
+    oss << values[i];
+    if (i != values.size()-1) {
+       oss << ',';
     }
-    sort(child_brain.begin(), child_brain.end(), std::greater<Neuron>());
-    // sort and cut off the lowest 30% of neurons to trim the fat
-    int attritionIndex = child_brain.size() * 0.7;
-    child_brain.erase(child_brain.begin()+attritionIndex, child_brain.end());
+  }
+  std::string strValues = oss.str();
 
-    return Individual(child_brain);
-
+  // insert or replace the data into the database
+  std::string insertQuery = "INSERT OR REPLACE INTO brain (key, value) VALUES ('" + state + "', '" + strValues + "');";
+  sqlite3_exec(db, insertQuery.c_str(), nullptr, 0, &errMsg);
 }
 
-// Define a function to perform crossover between two parents
-void crossover(Individual& parent1, Individual& parent2, Individual& child1, Individual& child2) {
-    float CROSSOVER_RATE = 0.7;
-    int GENE_LENGTH1 = parent1.brain.size();
-    int GENE_LENGTH2 = parent2.brain.size();
-    if ((float)rand() / RAND_MAX < CROSSOVER_RATE) {
-        int crossoverPoint = rand() % GENE_LENGTH1;
-        for (int i = 0; i < crossoverPoint; i++) {
-            child1.brain.push_back(parent1.brain[i]);
-            child2.brain.push_back(parent2.brain[i]);
+char Individual::getBestAction(std::string &state, int chance, int threshold) {
+  float maxValue = std::numeric_limits<float>::min();
+  char *errMsg;
+  int maxIndex = random_num(0, NUM_GENES-1);
+  char bestCh = GENES.at(maxIndex);
+  // if we rolled under the mutation threshold, perform the random action
+  if (random_num(0, 1000) < chance) {
+    return bestCh;
+  }
+  sqlite3 *db = this->db;
+
+  // retrieve data from the sqlite database
+  std::string selectQuery = "SELECT value FROM brain WHERE key='" + state + "';";
+  sqlite3_stmt *stmt;
+  int rc = sqlite3_prepare_v2(db, selectQuery.c_str(), -1, &stmt, nullptr);
+  if (rc == SQLITE_OK) {
+    std::vector<float> floats;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+      floats.clear();
+      std::string value(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0)));
+      //printf("Retrieved db string: %s\n", value.c_str());
+
+      // parse the float array back into a vector of floats
+      std::istringstream iss(value);
+      std::string numStr;
+      while (getline(iss, numStr, ',')) {
+        float f = stof(numStr);
+        floats.push_back(f);
+      }
+
+      //printf("Floats: \n");
+      // find max value in resulting float vector
+      if (floats.empty()) { return bestCh; }
+      for (int i=0;i<floats.size();i++) {
+        //printf(" %2.2f", floats[i]);
+        // only use a "best" value if it exceeds some given threshold
+        if (floats[i] > maxValue && floats[i] > threshold) {
+          maxIndex = i;
+          maxValue = floats[i];
+         // printf("Found move %c of value %2.2f\n", GENES.at(maxIndex), maxValue);
         }
-        for (int i = crossoverPoint; i < GENE_LENGTH2; i++) {
-            child1.brain.push_back(parent2.brain[i]);
-            child2.brain.push_back(parent1.brain[i]);
-        }
-    } else {
-        child1.brain = parent1.brain;
-        child2.brain = parent2.brain;
+      }
+      //printf("\n");
     }
+  }
+  sqlite3_finalize(stmt);
+  return GENES.at(maxIndex);
 }
 
+int Individual::getNodeCount() {
+  int count = 0;
+  char *errMsg;
 
-void Individual::setFitness(int i) {
-    this->fitness = i;
-}
-
-// Calculate a fitness score, this is the meat and potatoes of 
-// what the AI will consider to be a successful series of moves
-void Individual::calc_fitness() {
-    // Fitness of an individual is the average of the fitness 
-    // of all of its neurons
-    int totalFit = 0;
-    int newFit = 0;
-    for (int i=0;i<this->brain.size();i++) {
-        totalFit += this->brain[i].fitness;
+  // execute query to count rows
+  std::string countQuery = "SELECT COUNT(*) FROM brain;";
+  sqlite3_stmt *stmt;
+  int rc = sqlite3_prepare_v2(db, countQuery.c_str(), -1, &stmt, nullptr);
+  if (rc == SQLITE_OK) {
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+      count = sqlite3_column_int(stmt, 0);
     }
-    newFit = totalFit / this->brain.size();
-    printf("Fitness: %d / %lu = %d\n", totalFit, this->brain.size(), newFit);
-    this->fitness = newFit;
+  }
+  sqlite3_finalize(stmt);
+
+  return count;
 }
 
-// Overload < operator for comparisons
-bool operator<(const Individual &ind1, const Individual &ind2) {
-    return ind1.fitness < ind2.fitness;
+/*
+void Individual::storeMoveValue(std::string &state, char action, float value) {
+  bool found = false;
+  std::vector<float> neuron = findMap(state);
+  // neuron didn't exist, create it before trying to set it
+  for (int i=0;i<NUM_GENES;i++) {
+    if (GENES.at(i) == action) {
+     // key exists, assign a new value
+      found = true;
+      // set it directly
+      // keep the best value for this move
+      //this->brain[state][i] = std::fmaxf(this->brain[state][i], value);
+      // update value
+      this->brain[state][i] = value;
+      //neuron[i] = value;
+      // get the neuron again to see if it actually updated
+      //neuron = findMap(state);
+      //for (int j=0;j<NUM_GENES;j++) {
+      //  printf(" %d", neuron[j]);
+      //}
+      //printf("\n");
+      //printf("brain[%s][%c]=%d\n", state.c_str(), action, value);
+      break;
+    }
+  }
+  if (!found) {
+    printf("ERROR: Invalid action %c passed to storeMoveValue()\n", action);
+  }
 }
-// Overload < operator for comparisons
-bool operator>(const Individual &ind1, const Individual &ind2) {
-    return ind1.fitness > ind2.fitness;
+*/
+
+/*
+char Individual::getBestAction(std::string &state, int chance) {
+  float best = 0;
+  char bestCh = GENES.at(random_num(0, NUM_GENES-1)); // generate a random move
+  // if we rolled under the mutation threshold, then we do a mutation and perform the random move
+  if (random_num(0, 1000) < chance) {
+    return bestCh;
+  }
+  // if we didn't make the mutation roll, then we perform the best saved action
+  std::vector<float> neuron = findMap(state);
+  for (int i=0;i<NUM_GENES;i++) {
+    char ch = GENES.at(i);
+    int b = neuron[i];
+     if (b && b > best) {
+      best = neuron[i];
+      bestCh = ch;
+    }
+  }
+  if (best > 0) {
+    printf("found best action: %c of value: %2.2f\n", bestCh, best);
+  }
+  return bestCh;
 }
-
-
-
-
-
+*/
 
 
 #endif

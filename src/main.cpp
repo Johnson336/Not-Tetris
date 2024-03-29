@@ -19,7 +19,7 @@
 #include "Individual.hpp"
 
 #include <iostream>
-
+#include <sqlite3.h>
 
 /*
 TODO:
@@ -91,6 +91,7 @@ void must_init(bool test, const char *description) {
   */
 bool using_ai = true;
 
+sqlite3 *db;
 
 const int Rows = 20;
 const int Cols = 10;
@@ -98,10 +99,9 @@ const int border_width = 1;
 const double frames = 1.0 / 60.0;
 double level_timer = 2.0;
 double volume = 0.0;
-double ai_timer_mps = 60.0;
+double ai_timer_mps = 120.0;
 
 unsigned int time_ui = static_cast<unsigned int>( time(NULL) );
-
 
 
 const float piece_size = 25.0;
@@ -125,6 +125,9 @@ ALLEGRO_COLOR grey = al_map_rgb(127, 127, 127);
 ALLEGRO_COLOR black = al_map_rgb(0, 0, 0);
 ALLEGRO_COLOR white = al_map_rgb(255, 255, 255);
 
+ALLEGRO_FONT* font;
+ALLEGRO_AUDIO_STREAM* music;
+ALLEGRO_SAMPLE* line_clear;
 
 // Represents a single block in a Tetromino
 struct Block {
@@ -181,6 +184,7 @@ const Tetromino Tetrominoes[7] = {
 bool performDrop();
 bool performMoveRight();
 bool performMoveLeft();
+bool performMoveDown();
 // bool performRotate(Tetromino &t, int y, int x);
 
 // The board grid
@@ -201,6 +205,10 @@ int holes;
 int prevHoles;
 int height;
 int prevHeight;
+int lowestColumnHeight;
+int prevLowestColumnHeight;
+int brain_nodes;
+int prevDistance;
 int level;
 int clearedRows;
 bool gameover;
@@ -209,20 +217,27 @@ bool redraw;
 bool advanceLogic;
 Tetromino highlight;
 int tetBag[7] = {0, 1, 2, 3, 4, 5, 6};
-int tetBagIter;
+int tetBagIter = 0;
 
 void initialize_AI();
-void calcNeuronFitness();
-void getBoardState();
-void assignNewNeuron();
+float calcNeuronFitness();
+std::string getBoardState();
+std::string getBoardSilhouetteState();
+void storeMoveValue(std::string state, char move, float value);
 void createMap(std::map<std::string, char> *um);
+void createExtendedMap(std::map<std::string, char> *ue);
+void storeCachedMoves();
+int getHeightofCol(int col);
 
-// The state of the board passed to the AI
+// Cache of board States and moves performed that led up to a piece being dropped.
+// This chain of moves all share the final score once the piece is landed.
+std::vector<std::pair<std::string, char>> cachedMoves;
+
+// The 50-bit hex representation of the 200-bit binary board passed to the AI
 std::string boardState;
 
 // declare our AI variables
 std::vector<Individual> population;
-Neuron currentNeuron = Neuron(curTetrominoShape, boardState);
 int generation;
 int genIter;
 int actionIter;
@@ -232,6 +247,7 @@ std::vector<int> highScores;
 // create map between binary and its
 // equivalent hex code
 std::map<std::string, char> bin_hex_map;
+std::map<std::string, char> ext_hex_map;
    
 
 // Clears the board
@@ -286,13 +302,16 @@ void NewTetromino() {
 void Init() {
   shuffleTetBag();
   NewTetromino();
-  tetBagIter = 0;
+  //tetBagIter = 0;
   score = 0;
   prevScore = 0;
   holes = 0;
   prevHoles = 0;
   height = 0;
-  prevHeight = Rows;
+  prevHeight = 0;
+  prevDistance = 0;
+  lowestColumnHeight = 0;
+  prevLowestColumnHeight = 0;
   level = 1;
   gameover = false;
   clearedRows = 0;
@@ -306,16 +325,17 @@ void Init() {
   redraw = true;
   ClearBoard();
   if (firstRun) {
-    srand( time_ui );
     initialize_AI();
     firstRun = false;
     bestFit = 0;
+    brain_nodes = 0;
     // create our bin to hex map
     createMap(&bin_hex_map);
+    createExtendedMap(&ext_hex_map);
   }
   if (using_ai) {
-    getBoardState();
-    assignNewNeuron();
+    storeCachedMoves();
+    boardState = getBoardSilhouetteState();
   }
 }
 
@@ -339,8 +359,8 @@ int increaseScore(int lines) {
   }
 }
 
-// Function to create map between binary
-// number and its equivalent hexadecimal
+// Function to create map that converts from 200-bit binary
+// string representation of the board and its equivalent 50-bit hexadecimal
 void createMap(std::map<std::string, char> *um) {
     (*um)["0000"] = '0';
     (*um)["0001"] = '1';
@@ -360,19 +380,98 @@ void createMap(std::map<std::string, char> *um) {
     (*um)["1111"] = 'F';
 } 
 
+// function to create map that converts 2 digit string into 1 digit hex value
+void createExtendedMap(std::map<std::string, char> *ue) {
+  (*ue)["00"] = '0';
+  (*ue)["01"] = '1';
+  (*ue)["02"] = '2';
+  (*ue)["03"] = '3';
+  (*ue)["04"] = '4';
+  (*ue)["05"] = '5';
+  (*ue)["06"] = '6';
+  (*ue)["07"] = '7';
+  (*ue)["08"] = '8';
+  (*ue)["09"] = '9';
+  (*ue)["10"] = 'A';
+  (*ue)["11"] = 'B';
+  (*ue)["12"] = 'C';
+  (*ue)["13"] = 'D';
+  (*ue)["14"] = 'E';
+  (*ue)["15"] = 'F';
+  (*ue)["16"] = 'G';
+  (*ue)["17"] = 'H';
+  (*ue)["18"] = 'I';
+  (*ue)["19"] = 'J';
+  (*ue)["20"] = 'K';
+}
 
-void getBoardState() {
+// function to retrieve the board silhouette meaning only the top layer, to save on 
+// memory and number of possible board states
+std::string getBoardSilhouetteState() {
+  // we need to know what the board looks like, and where the player tetromino is
+  std::string boardHex = "";
+  std::string boardState = "";
+  for (int i=0;i<Cols;i++) {
+    int colHeight = getHeightofCol(i);
+    // append leading 0 to numbers below 10
+    if (colHeight < 10) {
+      boardState += '0';
+    }
+    boardState += std::to_string(colHeight);
+  }
+  for (int i=0;i<4;i++) {
+    Block &b = curTetromino.blocks[i + curTetromino.rotation];
+    int row = curTetromino.row + b.row;
+    int col = curTetromino.col + b.col;
+    if (row < 10) {
+      boardState += '0';
+    }
+    boardState += std::to_string(curTetromino.row + b.row);
+    if (col < 10) {
+      boardState += '0';
+    }
+    boardState += std::to_string(curTetromino.col + b.col);
+  }
+  for (int i=0;i<boardState.size()-1;i+=2) {
+    boardHex += ext_hex_map[boardState.substr(i, 2)];
+  }
+
+  //printf("boardState: %s (%lu) boardHex: %s (%lu)\n", boardState.c_str(), boardState.length(), boardHex.c_str(), boardHex.length());
+  return boardHex;
+}
+
+std::string getBoardState() {
   std::string boardBinary = "";
-  boardState = "";
+  std::string boardState = "";
+  bool found = false;
   for (int i=0;i<Rows;i++) {
     for (int j=0;j<Cols;j++) {
-      boardBinary += ((board[i][j] == ' ') ? '0' : '1');
+      found = false;
+      for (int a=0;a<4;a++) {
+        Block &b = curTetromino.blocks[a + curTetromino.rotation];
+        if ((curTetromino.row + b.row) == i && (curTetromino.col + b.col) == j) {
+          found = true;
+          break;
+        }
+      }
+      // set binary bit if the board contains a piece, or if the current tetromino piece
+      // was found at this location
+      boardBinary += ((board[i][j] == ' ' && !found) ? '0' : '1');
     }
   }
+  // debug board state output to console
+  //printf("\nBoard state:");
+  //for (int i=0;i<boardBinary.length();i++) {
+  //  if (i%Cols==0) printf("\n");
+  //  printf("%c", boardBinary.at(i));
+  //}
+  //printf("\n");
+  // perform binary to hex encoding to save memory
   for (int i=0;i<boardBinary.size()-3;i+=4) {
     boardState += bin_hex_map[boardBinary.substr(i, 4)];
   }
   // printf("boardBinary: %s (%lu) boardState: %s (%lu)\n", boardBinary.c_str(), boardBinary.length(), boardState.c_str(), boardState.length());
+  return boardState;
 }
 
 // Copies the current Tetromino onto the board
@@ -477,19 +576,19 @@ void Pause() {
 }
 
 // Drops the current Tetromino down until it collides with something
-void DropTetromino() {
+bool DropTetromino() {
   int droppedRows = 0;
-  while (!Collision(curTetromino, curTetromino.row, curTetromino.col)) {
+  while (performMoveDown()) {
     droppedRows++;
-    MoveTetrominoDown();
   }
-  if (droppedRows)
-    score += --droppedRows;
-  curTetromino.row--;
+  if (droppedRows) {
+    return true;
+  }
+  return false;
 }
 
 // Removes any completed rows
-void RemoveCompletedRows(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_SAMPLE* line_clear) {
+void RemoveCompletedRows() {
   int completedRows[Rows];
   int numCompletedRows = 0;
 
@@ -523,7 +622,7 @@ void RemoveCompletedRows(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_SAMPLE* line_clear
       // advanced level, play level_increase sound modified by number
       // of rows cleared
       // double speed at level 30
-      al_set_audio_stream_speed(music, 1+(level*(1/30)));
+      al_set_audio_stream_speed(music, 1+(level*((float)1/30)));
     } else {
       // didn't advance level, play line_clear sound modified by number
       // of rows cleared
@@ -536,11 +635,13 @@ void RemoveCompletedRows(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_SAMPLE* line_clear
     // al_play_sample(tetromino_land, 1.0, 0.0, 1.0, ALLEGRO_PLAYMODE_ONCE, NULL);
   }
 
+  // we don't update fitness after a piece lands anymore,
+  // we update fitness after each invididual movement and recalculate state
   // update Neuron fitness and boardState
-  if (using_ai) {
-    calcNeuronFitness();
-    getBoardState();
-  }
+  //if (using_ai) {
+  //  calcNeuronFitness();
+  //  getBoardState();
+  //}
 
 }
 
@@ -654,7 +755,13 @@ void drawBoard() {
           break;
       }
       drawSquare(x, y, c);
+      char out[10];
+      snprintf(out, 10, "%d", x);
+      drawText(out, x, -1, font, white);
     }
+    char out[10];
+    snprintf(out, 10, "%d", y);
+    drawText(out, -1, y, font, white);
   }
 }
 
@@ -679,7 +786,7 @@ void drawTetromino() {
 }
 
 
-void drawScore(ALLEGRO_FONT* font) {
+void drawScore() {
   drawText("Held Piece", Cols + 1.5, 1, font, white);
   if (held)
     printTetromino(heldTetromino, Cols + 2.5, 2);
@@ -701,29 +808,29 @@ void drawScore(ALLEGRO_FONT* font) {
 
 }
 // draw stats about AI
-void drawAIStats(ALLEGRO_FONT* font) {
+void drawAIStats() {
   char outText[20];
-  drawText("--AI Learning--", (Cols/2), -2, font, white);
-  drawText("AI Gen:", (Cols/2) - 5, -1, font, white);
+  drawText("--AI Learning--", ((float)Cols/2), -3, font, white);
+  drawText("Gen:", ((float)Cols/2) - 5, -2, font, white);
   snprintf(outText, 20, "%d", generation+1);
-  drawText(outText, (Cols / 2) - 1, -1, font, white);
-  drawText("Member: ", (Cols / 2) + 1, -1, font, white);
-  snprintf(outText, 20, "%d", genIter);
-  drawText(outText, (Cols / 2) + 5, -1, font, white);
-  drawText("HiScore: ", (Cols / 2) + 7, -1, font, white);
+  drawText(outText, ((float)Cols / 2) - 2.5, -2, font, white);
+  drawText("Nodes: ", ((float)Cols / 2) + 0, -2, font, white);
+  snprintf(outText, 20, "%d", brain_nodes);
+  drawText(outText, ((float)Cols / 2) + 3.5, -2, font, white);
+  drawText("HiScore: ", ((float)Cols / 2) + 7, -2, font, white);
   snprintf(outText, 20, "%d", bestFit);
-  drawText(outText, (Cols / 2) + 12, -1, font, white);
+  drawText(outText, ((float)Cols / 2) + 11.5, -2, font, white);
   // drawText("Neuron: ", (Cols / 2) - 5, 20.5, font, white);
   // snprintf(outText, 20, "%c + %s", curTetrominoShape, currentNeuron.boardState.c_str());
   // drawText(outText, (Cols / 2) - 1, 20.5, font, white);
 }
 
-void drawPaused(ALLEGRO_FONT* font) {
+void drawPaused() {
   if (!paused)
     return;
-  drawBox((Cols/3)-1, (Rows/2)-1, 10, 3, black);
-  drawBoxOutline((Cols/3)-1, (Rows/2)-1, 10, 3, 1.0, white);
-  drawText("---Paused---", Cols/3, Rows/2, font, white);
+  drawBox(((float)Cols/3)+7, ((float)Rows/2), 10, 3, black);
+  drawBoxOutline(((float)Cols/3)+7, ((float)Rows/2), 10, 3, 1.0, white);
+  drawText("---Paused---", (float)Cols/3+8, (float)Rows/2+1, font, white);
 }
 
 // Draw a ghost piece showing potential drop location
@@ -744,73 +851,61 @@ void drawHighlight() {
 
 
 
-void GameOver(ALLEGRO_FONT* font) {
+void GameOver() {
   
   // Draw Game Over across screen
-  drawBox((Cols/3), (Rows/2)-1, 12, 6, black);
-  drawBoxOutline((Cols/3), (Rows/2)-1, 12, 6, 1.0, white);
-  drawText("Game Over", (Cols/2) + 1, Rows/2, font, white);
+  drawBox(((float)Cols/3), ((float)Rows/2)-1, 12, 6, black);
+  drawBoxOutline(((float)Cols/3), ((float)Rows/2)-1, 12, 6, 1.0, white);
+  drawText("Game Over", ((float)Cols/2) + 1, (float)Rows/2, font, white);
   char outText[20];
   snprintf(outText, 20, "%d", score);
-  drawText("Final Score:", (Cols/2), (Rows/2)+1, font, white);
-  drawText(outText, (Cols/2) + 3, (Rows/2)+2, font, white);
-  drawText("Press [ESC] to exit", (Cols/2) - 1.25, (Rows/2) + 4, font, white);
+  drawText("Final Score:", ((float)Cols/2), ((float)Rows/2)+1, font, white);
+  drawText(outText, ((float)Cols/2) + 3, ((float)Rows/2)+2, font, white);
+  drawText("Press [ESC] to exit", ((float)Cols/2) - 1.25, ((float)Rows/2) + 4, font, white);
 }
 
 
 // Draw each element to the screen
-void DrawStuff(ALLEGRO_FONT* font) {
+void DrawStuff() {
   drawBoard();
   drawGrid();
   drawGhost();
   drawHighlight();
   drawTetromino();
-  drawScore(font);
-  drawPaused(font);
+  drawScore();
+  drawPaused();
   if (using_ai) {
-    drawAIStats(font);
+    drawAIStats();
   }
 }
 
 // perform functions move curTetromino around the game board
 // while receiving boolean feedback whether the action was
 // successfully performed
-bool performMoveDown(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_SAMPLE* line_clear) {
+bool performMoveDown() {
     MoveTetrominoDown();
   if (Collision(curTetromino, curTetromino.row, curTetromino.col)) {
     MoveTetrominoUp();
-    if (curTetromino.row <= 0) {
-      return false;
-    }
     CopyToBoard();
-    RemoveCompletedRows(music, line_clear);
-    NewTetromino();
-    assignNewNeuron();
-  }
-  return true;
-}
-
-bool performManualMoveDown(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_SAMPLE* line_clear) {
-  MoveTetrominoDown();
-  if (Collision(curTetromino, curTetromino.row, curTetromino.col)) {
-    MoveTetrominoUp();
-    if (curTetromino.row <= 0) {
-      return false;
+    RemoveCompletedRows();
+    //assignNewNeuron();
+    if (using_ai) {
+      storeCachedMoves();
+      // this is performed after every move, not only piece landing
+      //boardState = getBoardState();
     }
-    CopyToBoard();
-    RemoveCompletedRows(music, line_clear);
+    // this is after fitness calculation so we can determine the placement of the
+    // current tetromino before getting a new one
     NewTetromino();
-    assignNewNeuron();
+    return false;
   }
   score++;
   return true;
 }
 
-
 bool performDrop() {
-  DropTetromino();
   advanceLogic = true;
-  return true;
+  return DropTetromino();
 }
 
 bool performMoveLeft() {
@@ -861,10 +956,14 @@ bool performHold() {
 
 int countHolesinColumn(int col) {
   int holes = 0;
-  for (int i=Rows;i>1;i--) {
-    if (board[i][col] == ' ' && board[i-1][col] != ' ') {
+  // don't count top 4 rows for holes
+  int i=0;
+  while (i<Rows) {
+    // count each time we find a block above an empty space
+    if (board[i][col] != ' ' && board[i+1][col] == ' ') {
       holes++;
     }
+    i++;
   }
   return holes;
 }
@@ -877,17 +976,63 @@ int countTotalHoles() {
   return holes;
 }
 
-int getMaxHeight() {
-  for (int i=0;i<Rows;i++) {
-    for (int j=0;j<Cols;j++) {
-      if (board[i][j] != ' ') {
-        // found topmost row
-        return i;
-      }
+// returns height of column in terms of Rows-1-row_height
+// So a column with 0 blocks in it will have row height of
+// 20 - 20 = 0
+int getHeightofCol(int col) {
+  for (int row=0;row<Rows;row++) {
+    if (board[row][col] != ' ') {
+       return Rows-row;
     }
   }
-  return Rows;
+  return 0;
 }
+
+// returns highest overall block currently on the board
+// in terms of rows away from the bottom,
+// e.g. a row with 3 blocks from the bottom would be
+// 20 - 17 = 3
+int getMaxHeight() {
+  int max = 0;
+  for (int j=0;j<Cols;j++) {
+    max = std::fmaxf(max, getHeightofCol(j));
+  }
+  return max;
+}
+
+int getLowestColumn() {
+  int lowest = Rows-1;
+  int lowestCol = 0;
+  for (int i=0;i<Cols;i++) {
+    int colheight = getHeightofCol(i);
+    if (colheight < lowest) {
+      lowest = colheight;
+      lowestCol = i;
+    }
+  }
+  return lowestCol;
+}
+
+// returns height of lowest column on the board
+int getLowestColumnHeight() {
+  int lowest = Rows;
+  for (int i=0;i<Cols;i++) {
+    lowest = std::fminf(lowest, getHeightofCol(i));
+  }
+  return lowest;
+}
+
+int getTetrominoLowestPoint(Tetromino curTetromino) {
+  int lowest = 0;
+  for (int i=0;i<4;i++) {
+    Block &b = curTetromino.blocks[i + curTetromino.rotation];
+    // max is used here because as row increases, height decreases
+    lowest = std::fmaxf(lowest, curTetromino.row + b.row);
+  }
+  return Rows-1-lowest;
+}
+
+std::string dbFile = "brain.db";
 
 void initialize_AI() {
   std::cout << "First time AI init\n";
@@ -897,27 +1042,43 @@ void initialize_AI() {
   actionIter = 0;
 
   highScores = std::vector<int>();
- 
-  for (int i=0;i<POPULATION_SIZE;i++) {
-    std::vector<Neuron> brain = std::vector<Neuron>();
-    Individual temp = Individual(brain);
-    population.push_back(temp);
+  int rc = sqlite3_open(dbFile.c_str(), &db);
+  if (rc) {
+    std::cerr << "Can't open database: " << sqlite3_errmsg(db) << std::endl;
+    sqlite3_close(db);
   }
-  currentNeuron = population[genIter].findNeuron(curTetrominoShape, boardState);
+  Individual temp = Individual(db);
+  population.push_back(temp);
+ 
+  //for (int i=0;i<POPULATION_SIZE;i++) {
+  //  std::unordered_map<std::string, std::vector<float>> brain;
+  //  brain.clear();
+  //  Individual temp = Individual(brain);
+  //  population.push_back(temp);
+  //}
 }
 
+char currentMove;
 
 // Begin our AI function
-void AI_play(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_SAMPLE* line_clear) {
+void AI_play() {
   // Neuron neuron = population[genIter].findNeuron(curTetrominoInt, boardState);
-  char move = currentNeuron.sequence[actionIter++];
-  // printf("Using neuron (%d, %s)\n", neuron.tetrominoInt, neuron.boardState.c_str());
-  switch (move) {
+  // chance is the odds of mutating to perform a random action instead of the best action we have stored
+  //int chance = std::fmaxf(50, 1000-generation);
+  // 50 / 1000 = 5% mutation rate
+  int chance = 50;
+  // move value must cross this threshold, or we keep trying random moves
+  int threshold = 20;
+  currentMove = population[genIter].getBestAction(boardState, chance, threshold);
+  // cache the move that was performed here
+  cachedMoves.push_back({boardState, currentMove});
+  //printf("board[%s][%c]\n", boardState.c_str(), currentMove);
+  switch (currentMove) {
     case 'w':
       performRotate(curTetromino, curTetromino.row, curTetromino.col);
       break;
     case 's':
-      performManualMoveDown(music, line_clear);
+      performMoveDown();
       break;
     case 'a':
       performMoveLeft();
@@ -925,31 +1086,74 @@ void AI_play(ALLEGRO_AUDIO_STREAM* music, ALLEGRO_SAMPLE* line_clear) {
     case 'd':
       performMoveRight();
       break;
-    case 'e':
-      performHold();
-      break;
     case 'z':
       performDrop();
       break;
+    // currently disabled hold
+    case 'e':
+      performHold();
+      break;
   }
-  if (actionIter >= (GENOME_SIZE - 1))
-    actionIter = 0;
+  //int currentFitness = calcNeuronFitness();
+  //storeMoveValue(currentFitness);
+  // update board state after a move is performed
+  boardState = getBoardSilhouetteState();
 }
 
-// Called when a piece lands to determine fitness of Neuron
-void calcNeuronFitness() {
-  // AI signal to reset actionIter upon piece landing
-  actionIter = 0;
-  int holes = countTotalHoles();
-  int height = getMaxHeight();
 
-  // perform fitness calculations
-  int filledHoles = prevHoles - holes;
+// Store every move that was performed that led up to a piece being landed.
+// Here we calculate the score difference and give that score to every 
+// move that was performed.
+void storeCachedMoves() {
+  if (!cachedMoves.empty()) {
+    int height = getMaxHeight();
+    //printf("Board height after piece placement: %d\n", height);
+
+    float pieceValue = calcNeuronFitness();
+    //printf("Storing %lu moves with score %d\n", cachedMoves.size(), pieceValue);
+    while (!cachedMoves.empty()) {
+      std::pair<std::string, char> temp = cachedMoves.back();
+      //printf("board[%s][%c]=%2.2f\n", temp.first.c_str(), temp.second, pieceValue);
+      storeMoveValue(temp.first, temp.second, pieceValue);
+      cachedMoves.pop_back();
+    }
+    brain_nodes = population[0].getNodeCount();
+  }
+}
+
+void printCachedMoves() {
+  std::string out = "";
+  for (int i=0;i<cachedMoves.size();i++)
+    out += cachedMoves[i].second;
+  printf("Moves: %s\n", out.c_str());
+}
+
+// Called when a piece lands to determine fitness of the performed move
+float calcNeuronFitness() {
+  // assign weights to determine how highly we reward specific AI actions
+  // these are all penalties except for score
+  // =========================================
+  // ===== FUNCTION WEIGHT DECLARATIONS  =====
+  // =========================================
+  float holes_weight = 1.0f;
+  float height_weight = 3.0f;
+  float score_weight = 2.0f;
+  float moves_weight = 1.0f;
+
+  // get the baseline values of each weight
+  int holes = countTotalHoles();
+  int lowestPlacedBlock = getTetrominoLowestPoint(curTetromino);
+  // check how close the piece was to the lowest possible point it could have been dropped
+  int height = lowestPlacedBlock - prevLowestColumnHeight;
+  int moves = cachedMoves.size();
+  int new_holes = holes - prevHoles;
+  //int new_distance = prevDistance - distanceFromLowestCol;
+  int new_score = (score - prevScore);
   // filling holes gives positive number
   // filledHoles range is -4 <-> 4
   // a great move would be a 4
   // terrible move would be a -4
-  // therefore our fitness modifier is: ((filledHoles + 4) / 4)
+  // therefore our fitness modifier is: ((filledHoles + 2) / 4)
   // filledHoles
   // -----------
   // -4 = 0.00
@@ -961,48 +1165,60 @@ void calcNeuronFitness() {
   //  2 = 1.50
   //  3 = 1.75
   //  4 = 2.00
-  int heightLost = height - prevHeight;
   // losing height gives positive number
   // heightLost range is -4 <-> 4
   // a great move would clear 4 rows
   // a terrible move would clear -4 rows
-  // therefore our fitness modifier is: ((heightLost + 4) / 4)
+  // therefore our fitness modifier is: ((heightLost + 2) / 4)
+  // -4 = -1.00
+  // -3 = -0.75
+  // -2 = -0.50
+  // -1 = -0.25
+  //  0 = 0.00
+  //  1 = 0.25
+  //  2 = 0.50
+  //  3 = 0.75
+  //  4 = 1.00
 
-  int subScore = (score - prevScore);
-  float holesModifier = (((float)filledHoles + 4.0) / 4.0);
-  float heightModifier = (((float)heightLost + 4.0) / 4.0);
-  int newScore = (subScore * holesModifier * heightModifier);
-  // printf("prevHeight: %d newHeight: %d heightLost: %d\n", prevHeight, height, heightLost);
-  // printf("Subscore: %d x holesMod: %0.2f x heightMod: %0.2f = %d\n", subScore, holesModifier, heightModifier, newScore);
-  currentNeuron.setFitness(newScore);
+
+  float holes_value = (3 - new_holes) * holes_weight;
+  float height_value = 20 - height * height_weight;
+  float score_value = new_score * score_weight;
+  // ensure we have at least 1 move to divide by
+  float moves_value = moves * moves_weight;
+
+  // add up total value of all parameters
+  float total_value = (score_value - holes_value + height_value - moves_value);
+  //printf("action taken: %c\n", currentMove);
+  if (total_value > 20) {
+    printCachedMoves();
+    printf("Holes: %d Best H: %d Height: %d Score: %d Moves: %d\n", new_holes, prevLowestColumnHeight, lowestPlacedBlock, new_score, moves);
+    printf("HV: %2.2f HV: %2.2f SV: %2.2f MV: %2.2f\n", -holes_value, height_value, score_value, -moves_value);
+    printf("Total move value: %2.2f\n", total_value);
+  }
+  //printf("prevScore: %2d prevHoles: %2d prevHeight: %d\n", prevScore, prevHoles, prevHeight);
+  //printf("newScore:  %2d newHoles:  %2d newHeight:  %d\n", score, holes, height);
+  //printf("distance from lowest column %d: %d\n", lowestColumn, distanceFromLowestColumn);
+  //printf("distance modifier: %d\n", distanceModifier);
+  //printf("Subscore:  %2d holesMod:%0.2f heightM: %0.2f = %d\n", subScore, holesModifier, heightModifier, newScore);
 
   // carry over current values to be previous for the next piece
   prevScore = score;
   prevHoles = holes;
   prevHeight = height;
+  // assign new lowest column to be used for the next piece
+  prevLowestColumnHeight = getLowestColumnHeight();
 
+  return total_value;
 }
 
-void remove(std::vector<Neuron> &v, const Neuron &target) {
-    for (auto it = v.begin(); it != v.end(); it++) {
-        if (*it == target) {
-            v.erase(it--);
-        }
-    }
-}
-
-void assignNewNeuron() {
+void storeMoveValue(std::string state, char move, float value) {
   // we don't want to store useless neurons
-  if (currentNeuron.fitness > 0) {
-    // erase any duplicates of the current Neuron
-    remove(population[genIter].brain, currentNeuron);
-    // store current Neuron
-    population[genIter].brain.push_back(currentNeuron);
-  }
-  // get new Neuron from boardstate
-  currentNeuron = population[genIter].findNeuron(curTetrominoShape, boardState);
+  // store current Neuron
+  population[genIter].storeMoveValue(state, move, value);
 }
 
+/*
 void AI_create_generation() {
   actionIter = 0;
   // sort population in increasing order of fitness
@@ -1032,7 +1248,7 @@ void AI_create_generation() {
     int r2 = random_num(0, s);
     // make sure we don't have self-mating
     while (r1 == r2) {
-      r2 = random_num(0,2);
+      r2 = random_num(0, s);
     }
     // printf("%d mated with %d\n", r1, r2);
     Individual parent1 = population[r1];
@@ -1047,41 +1263,46 @@ void AI_create_generation() {
   generation++;
 
 }
+*/
 void AI_next_iteration() {
   if (genIter++ >= (POPULATION_SIZE - 1)) {
     genIter = 0;
 
     // store high score for this generation
-    highScores.push_back(bestFit);
-    bestFit = 0;
+    // only store every 100th generation high score
+    if (generation%100==0) {
+      highScores.push_back(bestFit);
+      printf("High Scores:\n");
+      for (int i=0;i<highScores.size();i++) {
+        printf("\tGen: %d\tHigh Score: %d\n", i+1, highScores[i]);
+      }
+    }
+    //bestFit = 0;
+    // increment the ai generation
+    generation++;
 
     // print high scores
-    printf("High Scores:\n");
-    for (int i=0;i<highScores.size();i++) {
-      printf("\tGen: %d\tHigh Score: %d\n", i+1, highScores[i]);
-    }
 
     // we tested all of our population, time to pick the best and make a new one
-    AI_create_generation();
+    //AI_create_generation();
   }
 }
 
 void soft_reset() {
   if (using_ai) {
-    std::cout << "AI running generation: " << generation << '\n';
     // Score the individual on how well it performed.
 
     // set the fitness for an individual equal to the sum of its neurons' fitness
-    population[genIter].setFitness(score);
+    // edit: we are only considering total score to be fitness rather than sum of its neurons fitness
+    //population[genIter].setFitness(score);
 
     // update best high score
     if (score > bestFit) {
       bestFit = score;
     }
 
-    for (int i=0;i<population.size();i++) {
-      printf("Population member: %d\tFitness: %d\tNeurons: %lu\n", i+1, population[i].fitness, population[i].brain.size());
-    }
+    printf("Generation: %d\tScore: %d\tNeurons: %d\n", generation, score, brain_nodes); 
+    //printf("Generation: %d\tScore: %d\n", generation, score);
     // Advance AI generation
     AI_next_iteration();
     // reboot forever if AI is training
@@ -1090,8 +1311,9 @@ void soft_reset() {
   }
 }
 
-
 int real_main(int argc, char** argv) {
+  // seed random number generator
+  srand(time_ui);
   // initialize game-related variables
   // Shuffle Tet bag and get first Tetromino
   Init();
@@ -1114,7 +1336,7 @@ int real_main(int argc, char** argv) {
   must_init(bump, "bump");
   ALLEGRO_SAMPLE* level_up = al_load_sample("assets/sounds/level_up.wav");
   must_init(level_up, "level_up");
-  ALLEGRO_SAMPLE* line_clear = al_load_sample("assets/sounds/line_clear.wav");
+  line_clear = al_load_sample("assets/sounds/line_clear.wav");
   must_init(line_clear, "line_clear");
   ALLEGRO_SAMPLE* metal_clang = al_load_sample("assets/sounds/metal_clang.wav");
   must_init(metal_clang, "metal_clang");
@@ -1126,7 +1348,7 @@ int real_main(int argc, char** argv) {
   must_init(tetromino_rotate, "tetromino_rotate");
 
   /* Music Tracks */
-  ALLEGRO_AUDIO_STREAM* music = al_load_audio_stream("assets/music/Electro_-Nitro-Fun-New-Game-_Monstercat-Release_.ogg", 2, 2048);
+  music = al_load_audio_stream("assets/music/Electro_-Nitro-Fun-New-Game-_Monstercat-Release_.ogg", 2, 2048);
   must_init(music, "music");
   al_set_audio_stream_playmode(music, ALLEGRO_PLAYMODE_LOOP);
   al_attach_audio_stream_to_mixer(music, al_get_default_mixer());
@@ -1160,7 +1382,7 @@ int real_main(int argc, char** argv) {
 
   must_init(al_init_font_addon(), "font addon");
   must_init(al_init_ttf_addon(), "ttf addon");
-  ALLEGRO_FONT* font = al_load_ttf_font("assets/prstart.ttf", 15, 0);
+  font = al_load_ttf_font("assets/prstart.ttf", 15, 0);
   must_init(font, "font");
 
   must_init(al_init_image_addon(), "image addon");
@@ -1206,7 +1428,7 @@ int real_main(int argc, char** argv) {
           // game tick logic goes here, pieces drop at fixed rate
           advanceLogic = false;
           // Failed to move piece down at top row, game lost
-          if (!performMoveDown(music, line_clear)) {
+          if (!performMoveDown() && curTetromino.row <= 0) {
             gameover = true;
             redraw = true;
             break;
@@ -1215,7 +1437,7 @@ int real_main(int argc, char** argv) {
         // AI timer
         if (ai_move) {
           ai_move = false;
-          AI_play(music, line_clear);
+          AI_play();
         }
         redraw = true;   
         break;
@@ -1238,7 +1460,7 @@ int real_main(int argc, char** argv) {
           case ALLEGRO_KEY_S:
             if (paused || gameover)
               break;
-            performManualMoveDown(music, line_clear);
+            performMoveDown();
           break;
           case ALLEGRO_KEY_SPACE:
             if (paused || gameover)
@@ -1319,7 +1541,7 @@ int real_main(int argc, char** argv) {
       redraw = false;
       al_clear_to_color(black);
 
-      DrawStuff(font);
+      DrawStuff();
       
       // Game ended, print loss screen if a human is playing
       if (gameover) {
@@ -1327,7 +1549,7 @@ int real_main(int argc, char** argv) {
           soft_reset();
           // done = true;
         } else {
-          GameOver(font);
+          GameOver();
         }
       }
         
@@ -1338,6 +1560,7 @@ int real_main(int argc, char** argv) {
   }
 
 
+  sqlite3_close(db);
   al_destroy_font(font);
   al_destroy_display(disp);
   al_destroy_timer(timer);
