@@ -185,6 +185,7 @@ bool performDrop();
 bool performMoveRight();
 bool performMoveLeft();
 bool performMoveDown();
+void MoveTetrominoDown();
 // bool performRotate(Tetromino &t, int y, int x);
 
 // The board grid
@@ -223,7 +224,7 @@ void initialize_AI();
 float calcNeuronFitness();
 std::string getBoardState();
 std::string getBoardSilhouetteState();
-void storeMoveValue(std::string state, char move, float value);
+void storeMoveValue(const std::string &state, char move, float value, std::string &nextState);
 void createMap(std::map<std::string, char> *um);
 void createExtendedMap(std::map<std::string, char> *ue);
 void storeCachedMoves();
@@ -231,7 +232,8 @@ int getHeightofCol(int col);
 
 // Cache of board States and moves performed that led up to a piece being dropped.
 // This chain of moves all share the final score once the piece is landed.
-std::vector<std::pair<std::string, char>> cachedMoves;
+//std::vector<std::pair<std::string, char>> cachedMoves;
+std::unordered_map<std::string, char> cachedMoves;
 
 // The 50-bit hex representation of the 200-bit binary board passed to the AI
 std::string boardState;
@@ -279,13 +281,26 @@ void shuffleTetBag() {
 }
 
 
+bool EntireTetrominoIsVisible(Tetromino &t) {
+  for (int i=0;i<4;i++) {
+    Block &b = t.blocks[i + t.rotation];
+    if (t.row + b.row < 0 || t.row + b.row >= Rows || t.col + b.col < 0 || t.col + b.col >= Cols) {
+      return false;
+    }
+  }
+  return true;
+}
 
 // shifts nextTet into curTet and pulls a new nextTet
 void NewTetromino() {
   performedSwap = false;
   curTetromino = nextTetromino;
   curTetrominoShape = curTetromino.c; // 
-  curTetromino.row = -1;
+  curTetromino.row = -4;
+  // slide tetromino down until fully visible before player can move it
+  while (!EntireTetrominoIsVisible(curTetromino)) {
+    MoveTetrominoDown();
+  }
   curTetromino.col = (Cols/3) + 1;
   // Bag is empty
   if (tetBagIter >= 6) {
@@ -333,10 +348,12 @@ void Init() {
     createMap(&bin_hex_map);
     createExtendedMap(&ext_hex_map);
   }
-  if (using_ai) {
-    storeCachedMoves();
-    boardState = getBoardSilhouetteState();
-  }
+  //if (using_ai) {
+    // not currently storing cached moves
+    //storeCachedMoves();
+    // retrieve first board state so movement can begin
+    //boardState = getBoardState();
+  //}
 }
 
 int increaseScore(int lines) {
@@ -890,9 +907,8 @@ bool performMoveDown() {
     RemoveCompletedRows();
     //assignNewNeuron();
     if (using_ai) {
+      // store any more we cached
       storeCachedMoves();
-      // this is performed after every move, not only piece landing
-      //boardState = getBoardState();
     }
     // this is after fitness calculation so we can determine the placement of the
     // current tetromino before getting a new one
@@ -1040,6 +1056,11 @@ void initialize_AI() {
   generation = 0;
   genIter = 0;
   actionIter = 0;
+  float learningRate = 0.1f;
+  float discountFactor = 0.9f;
+  float explorationRate = 1.0f;
+  float minExplorationRate = 0.01f;
+  float explorationDecayRate = 0.99f;
 
   highScores = std::vector<int>();
   int rc = sqlite3_open(dbFile.c_str(), &db);
@@ -1047,7 +1068,7 @@ void initialize_AI() {
     std::cerr << "Can't open database: " << sqlite3_errmsg(db) << std::endl;
     sqlite3_close(db);
   }
-  Individual temp = Individual(db);
+  Individual temp = Individual(db, learningRate, discountFactor, explorationRate, minExplorationRate, explorationDecayRate);
   population.push_back(temp);
  
   //for (int i=0;i<POPULATION_SIZE;i++) {
@@ -1066,12 +1087,16 @@ void AI_play() {
   // chance is the odds of mutating to perform a random action instead of the best action we have stored
   //int chance = std::fmaxf(50, 1000-generation);
   // 50 / 1000 = 5% mutation rate
-  int chance = 50;
+  //int chance = 50;
   // move value must cross this threshold, or we keep trying random moves
-  int threshold = 20;
-  currentMove = population[genIter].getBestAction(boardState, chance, threshold);
+  //int threshold = 20;
+  //retrieve current board state for the AI to view
+  boardState = getBoardState();
+  // retrieve the best action for the current board state
+  currentMove = population[genIter].getBestAction(boardState);
   // cache the move that was performed here
-  cachedMoves.push_back({boardState, currentMove});
+  cachedMoves[boardState] = currentMove;
+  //cachedMoves.push_back({boardState, currentMove});
   //printf("board[%s][%c]\n", boardState.c_str(), currentMove);
   switch (currentMove) {
     case 'w':
@@ -1097,7 +1122,10 @@ void AI_play() {
   //int currentFitness = calcNeuronFitness();
   //storeMoveValue(currentFitness);
   // update board state after a move is performed
-  boardState = getBoardSilhouetteState();
+  //std::string nextState = getBoardState();
+  // very simple reward state just means if our score went up, then we get a reward
+  // this is not very ideal because it only rewards moving down, but we'll see how
+  // it goes
 }
 
 
@@ -1110,21 +1138,23 @@ void storeCachedMoves() {
     //printf("Board height after piece placement: %d\n", height);
 
     float pieceValue = calcNeuronFitness();
+    std::string nextState = getBoardState();
     //printf("Storing %lu moves with score %d\n", cachedMoves.size(), pieceValue);
-    while (!cachedMoves.empty()) {
-      std::pair<std::string, char> temp = cachedMoves.back();
-      //printf("board[%s][%c]=%2.2f\n", temp.first.c_str(), temp.second, pieceValue);
-      storeMoveValue(temp.first, temp.second, pieceValue);
-      cachedMoves.pop_back();
+    for (const auto &it : cachedMoves) {
+      storeMoveValue(it.first, it.second, pieceValue, nextState);
     }
+    cachedMoves.clear();
+
     brain_nodes = population[0].getNodeCount();
+    population[genIter].decayExplorationRate();
   }
 }
 
 void printCachedMoves() {
   std::string out = "";
-  for (int i=0;i<cachedMoves.size();i++)
-    out += cachedMoves[i].second;
+  for (const auto &it : cachedMoves) {
+    out += it.second;
+  }
   printf("Moves: %s\n", out.c_str());
 }
 
@@ -1136,8 +1166,8 @@ float calcNeuronFitness() {
   // ===== FUNCTION WEIGHT DECLARATIONS  =====
   // =========================================
   float holes_weight = 1.0f;
-  float height_weight = 3.0f;
-  float score_weight = 2.0f;
+  float height_weight = 1.0f;
+  float score_weight = 1.0f;
   float moves_weight = 1.0f;
 
   // get the baseline values of each weight
@@ -1188,14 +1218,12 @@ float calcNeuronFitness() {
   float moves_value = moves * moves_weight;
 
   // add up total value of all parameters
-  float total_value = (score_value - holes_value + height_value - moves_value);
+  float total_value = (score_value + holes_value + height_value - moves_value);
   //printf("action taken: %c\n", currentMove);
-  if (total_value > 20) {
-    printCachedMoves();
-    printf("Holes: %d Best H: %d Height: %d Score: %d Moves: %d\n", new_holes, prevLowestColumnHeight, lowestPlacedBlock, new_score, moves);
-    printf("HV: %2.2f HV: %2.2f SV: %2.2f MV: %2.2f\n", -holes_value, height_value, score_value, -moves_value);
-    printf("Total move value: %2.2f\n", total_value);
-  }
+  printCachedMoves();
+  printf("Holes: %d Best H: %d Height: %d Score: %d Moves: %d\n", new_holes, prevLowestColumnHeight, lowestPlacedBlock, new_score, moves);
+  printf("HV: %2.2f HV: %2.2f SV: %2.2f MV: %2.2f\n", holes_value, height_value, score_value, -moves_value);
+  printf("Total move value: %2.2f\n", total_value);
   //printf("prevScore: %2d prevHoles: %2d prevHeight: %d\n", prevScore, prevHoles, prevHeight);
   //printf("newScore:  %2d newHoles:  %2d newHeight:  %d\n", score, holes, height);
   //printf("distance from lowest column %d: %d\n", lowestColumn, distanceFromLowestColumn);
@@ -1212,10 +1240,10 @@ float calcNeuronFitness() {
   return total_value;
 }
 
-void storeMoveValue(std::string state, char move, float value) {
+void storeMoveValue(const std::string &state, char move, float value, std::string &nextState) {
   // we don't want to store useless neurons
   // store current Neuron
-  population[genIter].storeMoveValue(state, move, value);
+  population[genIter].storeMoveValue(state, move, value, nextState);
 }
 
 /*
