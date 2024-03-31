@@ -30,6 +30,30 @@ int random_num(int min, int max) {
   return value;
 }
 
+// convert from string to vector with delimiter
+std::vector<float> strToVect(std::string str, char delim) {
+  std::istringstream iss(str);
+  std::vector<float> out;
+  std::string element;
+  while (getline(iss, element, delim)) {
+    float f = stof(element);
+    out.push_back(f);
+  }
+  return out;
+}
+
+// convert from vector to string with delimiter
+std::string vectToStr(std::vector<float> values, char delim) {
+  std::ostringstream oss;
+  for (int i=0;i<values.size();i++) {
+    oss << values[i];
+    if (i != values.size()-1) {
+       oss << delim;
+    }
+  }
+  return oss.str();
+}
+
 static std::random_device rd;
 static std::mt19937 gen(rd());
 std::uniform_real_distribution<> dis(0.0, 1.0);
@@ -99,12 +123,7 @@ std::vector<float> Individual::findMap(const std::string &state) {
       std::string value(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0)));
 
       // parse the string and convert it into a vector of floats
-      std::istringstream iss(value);
-      std::string numStr;
-      while (getline(iss, numStr, ',')) {
-        float f = stof(numStr);
-        values.push_back(f);
-      }
+      values = strToVect(value, ',');
     }
   }
   sqlite3_finalize(stmt);
@@ -147,14 +166,7 @@ void Individual::storeMoveValue(const std::string &state, char action, float rew
   //}
 
   // convert vector of floats into comma-separated string for storage
-  std::ostringstream oss;
-  for (int i=0;i<values.size();i++) {
-    oss << values[i];
-    if (i != values.size()-1) {
-       oss << ',';
-    }
-  }
-  std::string strValues = oss.str();
+  std::string strValues = vectToStr(values, ',');
 
   // insert or replace the data into the database
   std::string insertQuery = "INSERT OR REPLACE INTO brain (key, value) VALUES ('" + state + "', '" + strValues + "');";
