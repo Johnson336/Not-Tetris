@@ -19,6 +19,7 @@
 #include "Individual.hpp"
 
 #include <iostream>
+#include <stack>
 #include <sqlite3.h>
 
 /*
@@ -99,7 +100,7 @@ const int border_width = 1;
 const double frames = 1.0 / 60.0;
 double level_timer = 2.0;
 double volume = 0.0;
-double ai_timer_mps = 120.0;
+double ai_timer_mps = 200.0;
 
 unsigned int time_ui = static_cast<unsigned int>( time(NULL) );
 
@@ -185,11 +186,31 @@ bool performDrop();
 bool performMoveRight();
 bool performMoveLeft();
 bool performMoveDown();
+bool performRotate(Tetromino &t);
 void MoveTetrominoDown();
+std::vector<std::vector<char>> simulateMove(std::vector<std::vector<char>> board, Tetromino t, char move);
+int getStateScore(const std::string &board, const char action);
+bool simulateCollision(std::vector<std::vector<char>> &board, Tetromino &t, int y, int x);
+std::vector<std::vector<char>> simulateCopyToBoard(std::vector<std::vector<char>> &board, Tetromino &t);
+void simulateRotate(Tetromino &t);
+void simulateMoveLeft(Tetromino &t);
+void simulateMoveRight(Tetromino &t);
+void simulateMoveDown(Tetromino &t);
+void simulateMoveUp(Tetromino &t);
+bool simulatePerformMoveLeft(std::vector<std::vector<char>> &board, Tetromino &t);
+bool simulatePerformMoveRight(std::vector<std::vector<char>> &board, Tetromino &t);
+bool simulatePerformRotate(std::vector<std::vector<char>> &board, Tetromino &t);
+bool simulatePerformMoveDown(std::vector<std::vector<char>> &board, Tetromino &t);
+bool simulateDropTetromino(std::vector<std::vector<char>> &board, Tetromino &t);
+std::vector<char> getPossibleMoves();
+bool game_over(std::vector<std::vector<char>> &board);
+char getBestMove(std::vector<std::vector<char>> board, int depth, Tetromino t);
+
 // bool performRotate(Tetromino &t, int y, int x);
 
 // The board grid
-char board[Rows][Cols];
+std::vector<char> row(Cols);
+std::vector<std::vector<char>> board(Rows);
 
 
 // Details of the current Tetromino
@@ -239,9 +260,8 @@ std::unordered_map<std::string, char> cachedMoves;
 std::string boardState;
 
 // declare our AI variables
-std::vector<Individual> population;
-int generation;
-int genIter;
+Individual *agent;
+int gamesPlayed;
 int actionIter;
 int bestFit;
 std::vector<int> highScores;
@@ -254,10 +274,10 @@ std::map<std::string, char> ext_hex_map;
 
 // Clears the board
 void ClearBoard() {
-  for (int i = 0; i < Rows; i++) {
-    for (int j = 0; j < Cols; j++) {
-      board[i][j] = ' ';
-    }
+  row = std::vector<char>(Cols, ' ');
+  board.clear();
+  for (int i=0;i<Rows;i++) {
+    board.push_back(row);
   }
 }
 
@@ -397,6 +417,25 @@ void createMap(std::map<std::string, char> *um) {
     (*um)["1111"] = 'F';
 } 
 
+static std::unordered_map<char, std::string> decodeState = {
+  {'0', "0000"},
+  {'1', "0001"},
+  {'2', "0010"},
+  {'3', "0011"},
+  {'4', "0100"},
+  {'5', "0101"},
+  {'6', "0110"},
+  {'7', "0111"},
+  {'8', "1000"},
+  {'9', "1001"},
+  {'A', "1010"},
+  {'B', "1011"},
+  {'C', "1100"},
+  {'D', "1101"},
+  {'E', "1110"},
+  {'F', "1111"},
+};
+
 // function to create map that converts 2 digit string into 1 digit hex value
 void createExtendedMap(std::map<std::string, char> *ue) {
   (*ue)["00"] = '0';
@@ -422,6 +461,269 @@ void createExtendedMap(std::map<std::string, char> *ue) {
   (*ue)["20"] = 'K';
 }
 
+static std::unordered_map<char, int> decodeSilhouette = {
+  {'0', 0},
+  {'1', 1},
+  {'2', 2},
+  {'3', 3},
+  {'4', 4},
+  {'5', 5},
+  {'6', 6},
+  {'7', 7},
+  {'8', 8},
+  {'9', 9},
+  {'A', 10},
+  {'B', 11},
+  {'C', 12},
+  {'D', 13},
+  {'E', 14},
+  {'F', 15},
+  {'G', 16},
+  {'H', 17},
+  {'I', 18},
+  {'J', 19},
+  {'K', 20},
+};
+
+void printSimulatedBoard(std::vector<std::vector<char>> &board) {
+  for (int i=0;i<board.size();i++) {
+    for (int j=0;j<row.size();j++) {
+       printf("%c", board[i][j]);
+    }
+    printf("\n");
+  }
+}
+
+// determine a score for a vector board state (simulated state)
+int getSimulatedScore(std::vector<std::vector<char>> &board) {
+  int score = 0;
+  int rowscore = 0;
+  for (int i=0;i<board.size();i++) {
+    for (int j=0;j<row.size();j++) {
+      rowscore += (board[i][j] == ' ' ? 0 : 1);
+      // printf("%c", row[j]);
+    }
+    if (rowscore == Cols) {
+      // this row is full and will be cleared, give double points for this
+      rowscore *= 2;
+    }
+    // printf(" row score: %d * %d = %d\n", rowscore, i, rowscore*i);
+    score += rowscore*i;
+    rowscore = 0;
+  }
+  //printf("Testing board:\n");
+  //printSimulatedBoard(board);
+  //printf("State score: %d\n", score);
+
+  return score;  
+}
+
+
+int minimax(std::vector<std::vector<char>> &board, Tetromino &t, int depth, int alpha, int beta, bool maximizing_player) {
+  //printf("depth: %d\n", depth);
+  if (depth == 0 || game_over(board)) {
+    return getSimulatedScore(board);
+  }
+  if (maximizing_player) {
+    int max_eval = INT_MIN;
+    for (char move : getPossibleMoves()) {
+      std::vector<std::vector<char>> newBoard = simulateMove(board, t, move);
+      int eval = minimax(newBoard, t, depth - 1, alpha, beta, false);
+      max_eval = std::max(max_eval, eval);
+      alpha = std::max(alpha, eval);
+      if (beta <= alpha) {
+        break;
+      }
+    }
+    return max_eval;
+  } else {
+    int min_eval = INT_MAX;
+    for (char move : getPossibleMoves()) {
+      std::vector<std::vector<char>> newBoard = simulateMove(board, t, move);
+      int eval = minimax(newBoard, t, depth - 1, alpha, beta, true);
+      min_eval = std::min(min_eval, eval);
+      beta = std::min(beta, eval);
+      if (beta <= alpha) {
+        break;
+      }
+    }
+    return min_eval;
+  }
+}
+
+int stackMoveSearch(std::vector<std::vector<char>> board, int depth, Tetromino &t) {
+  std::stack<std::pair<std::vector<std::vector<char>>, int>> stack;
+  stack.push({board, 0});
+
+  while (!stack.empty()) {
+    auto current_state = stack.top();
+    stack.pop();
+    auto current_board = current_state.first;
+    int current_depth = current_state.second;
+
+    if (current_depth == depth || game_over(current_board)) {
+      return getSimulatedScore(current_board);
+    }
+
+    for (char move : getPossibleMoves()) {
+      auto newBoard = simulateMove(current_board, t, move);
+      stack.push({newBoard, current_depth+1});
+    }
+    // should never reach this
+  }
+  return 0;
+}
+
+char getBestMove(std::vector<std::vector<char>> board, int depth, Tetromino t) {
+  int best_score = INT_MIN;
+  char best_move = MOVES.at(random_num(0, NUM_MOVES-1)); // default to random move
+  std::vector<std::vector<char>> boardCopy = board;
+  Tetromino tCopy = t;
+  for (char move : getPossibleMoves()) {
+    std::vector<std::vector<char>> newBoard = simulateMove(boardCopy, tCopy, move);
+    //int score = minimax(newBoard, t, depth - 1, INT_MIN, INT_MAX, false);
+    //int score = getSimulatedScore(newBoard);
+    // use stack search to locate best move
+    int score = stackMoveSearch(boardCopy, depth - 1, tCopy);
+    if (score > best_score) {
+      best_score = score;
+      best_move = move;
+    }
+  }
+  //printf("Best move: %c\n", best_move);
+  return best_move;
+}
+
+// determine if the game is over on a simulated board state
+bool game_over(std::vector<std::vector<char>> &board) {
+  for (int j=0;j<Cols;j++) {
+    // end the game if there's a piece placed in the 0-row
+    if (board[0][j] != ' ') return true;
+  }
+  return false;
+}
+
+std::vector<char> getPossibleMoves() {
+  return {'w', 's', 'a', 'd', 'z'};
+}
+
+// takes a vector board state with current Tetromino, performs an action, returns the resulting vector board state
+std::vector<std::vector<char>> simulateMove(std::vector<std::vector<char>> board, Tetromino t, char move) {
+  //std::vector<std::vector<char>> newBoard;
+  
+  switch (move) {
+    case 'w':
+      printf("Simulating rotate\n");
+      simulatePerformRotate(board, t);
+      board = simulateCopyToBoard(board, t);
+    break;
+    case 's':
+      printf("Simulating soft drop\n");
+      simulatePerformMoveDown(board, t);
+      board = simulateCopyToBoard(board, t);
+    break;
+    case 'a':
+      printf("Simulating move left\n");
+      simulatePerformMoveLeft(board, t);
+      board = simulateCopyToBoard(board, t);
+    break;
+    case 'd':
+      printf("Simulating move right\n");
+      simulatePerformMoveRight(board, t);
+      board = simulateCopyToBoard(board, t);
+    break;
+    case 'z':
+      printf("Simulating hard drop\n");
+      simulateDropTetromino(board, t);
+      board = simulateCopyToBoard(board, t);
+    break;
+    default:
+      printf("ERROR: Reached impossible simulated move: %c\n", move);
+      return board;
+    break;
+  }
+  return board;
+}
+
+// determine a score for an arbitrary board state
+int getStateScore(const std::string &board, const char action) {
+  int score = 0;
+  std::vector<std::vector<char>> binBoard;
+  std::vector<char> row;
+  // translate the string state back into a matrix
+  for (int i=0;i<board.length();i++) {
+    std::string Byte = decodeState[board.at(i)];
+    // printf("char: %c %d %s\n", board.at(i), i, Byte.c_str());
+    for (int a=0;a<4;a++) {
+      row.push_back(Byte.at(a));
+      if (row.size() == Cols) {
+        binBoard.push_back(row);
+        row.clear();
+      }
+      //printf("  char: %c %d\n", Byte.at(a), Byte.at(a));
+      //printf(" %d, %d\n", x, y);
+    }
+  }
+  score = getSimulatedScore(binBoard);
+
+  return score;  
+  // start at bottom of board and increase score for continuous segments
+  // score fewer points for pieces placed higher in the board
+}
+
+
+// function to displat a debug printout of a board state
+void printBoardState(const std::string &board) {
+  printf("State:\n");
+  std::string out = "";
+  for (int i=0;i<board.length();i++) {
+    out += decodeState[board.at(i)];
+  }
+  for (int i=0;i<out.length();i++) {
+    if (i>0 && i%Cols==0) {
+       printf("\n");
+    }
+    printf("%c", out.at(i));
+  }
+  printf("\n");
+}
+
+// function to display a debug printout of a board silhouette
+void printBoardSilhouette(const std::string &board) {
+  // store column height in a vector for easy traversal
+  std::vector<int> colHeights;
+  for (int j=0;j<Cols;j++) {
+    int height = decodeSilhouette[board.at(j)];
+    colHeights.push_back(height);
+    // printf("col %d: %d\n", j, height);
+  }
+  // create vector of piece indices
+  std::vector<std::pair<int, int>> piece;
+  printf("Piece:\n");
+  for (int j=0;j<4;j++) {
+    int x = decodeSilhouette[board.at(Cols+j*2)];
+    int y = decodeSilhouette[board.at(Cols+(j*2)+1)];
+    printf("%d, %d\n", x, y);
+    piece.push_back(std::pair{x, y});
+  }
+
+  for (int i=0;i<Rows;i++) {
+    std::string row = "";
+    for (int j=0;j<Cols;j++) {
+      int h = Rows-colHeights[j];
+      bool found = false;
+      // check piece locations
+      for (auto &p : piece) {
+        if (i==p.first && j==p.second) {
+          found = true;
+        }
+      }
+      row += (found ? '+' : (h == i ? '=' : (h < i ? '-' : ' ')));
+    }
+    printf("%s\n", row.c_str());
+  }
+}
+
 // function to retrieve the board silhouette meaning only the top layer, to save on 
 // memory and number of possible board states
 std::string getBoardSilhouetteState() {
@@ -440,6 +742,7 @@ std::string getBoardSilhouetteState() {
     Block &b = curTetromino.blocks[i + curTetromino.rotation];
     int row = curTetromino.row + b.row;
     int col = curTetromino.col + b.col;
+    printf("%d, %d\n", row, col);
     if (row < 10) {
       boardState += '0';
     }
@@ -454,6 +757,7 @@ std::string getBoardSilhouetteState() {
   }
 
   //printf("boardState: %s (%lu) boardHex: %s (%lu)\n", boardState.c_str(), boardState.length(), boardHex.c_str(), boardHex.length());
+  //printBoardSilhouette(boardState);
   return boardHex;
 }
 
@@ -528,6 +832,121 @@ void MoveTetrominoUp() {
   curTetromino.row--;
 }
 
+// determine if there is a collision on a simulated board location
+bool simulateCollision(std::vector<std::vector<char>> &board, Tetromino &t, int y, int x) {
+  for (int i=0;i<4;i++) {
+    Block &b = t.blocks[i + t.rotation];
+    int row = y + b.row;
+    int col = x + b.col;
+    // bounds and collision check
+    if (row >= Rows || row < 0 || col >= Cols || col < 0 || board[row][col] != ' ') {
+       return true;
+    }
+  }
+  return false;
+}
+
+// returns a new board state after the given tetromino has been copied to the starting board state
+std::vector<std::vector<char>> simulateCopyToBoard(std::vector<std::vector<char>> &board, Tetromino &t) {
+  std::vector<std::vector<char>> newBoard = board;
+  printf("Original board:\n");
+  printf("Copying piece: %c at %d,%d\n", t.c, t.row, t.col);
+  printSimulatedBoard(board);
+  for (int i=0;i<4;i++) {
+    Block &b = t.blocks[i + t.rotation];
+    newBoard[t.row + b.row][t.col + b.col] = t.c;
+  }
+  printf("Old board: \n");
+  printSimulatedBoard(board);
+  printf("New board:\n");
+  printSimulatedBoard(newBoard);
+  return newBoard;
+}
+
+void simulateRotate(Tetromino &t) {
+  t.rotation+=4;
+  if (t.rotation > 12) {
+    t.rotation = 0;
+  }
+}
+
+void simulateMoveLeft(Tetromino &t) {
+  t.col--;
+}
+
+void simulateMoveRight(Tetromino &t) {
+  t.col++;
+}
+
+void simulateMoveDown(Tetromino &t) {
+  t.row++;
+}
+
+void simulateMoveUp(Tetromino &t) {
+  t.row--;
+}
+
+bool simulatePerformMoveLeft(std::vector<std::vector<char>> &board, Tetromino &t) {
+  simulateMoveLeft(t);
+  if (simulateCollision(board, t, t.row, t.col)) {
+    simulateMoveRight(t);
+    return false;
+  }
+  return true;
+}
+
+bool simulatePerformMoveRight(std::vector<std::vector<char>> &board, Tetromino &t) {
+  simulateMoveRight(t);
+  if (simulateCollision(board, t, t.row, t.col)) {
+    simulateMoveLeft(t);
+    return false;
+  }
+  return true;
+}
+
+bool simulatePerformRotate(std::vector<std::vector<char>> &board, Tetromino &t) {
+  simulateRotate(t);
+  // rotated into solid surface, attempt to kick off
+  if (simulateCollision(board, t, t.row, t.col)) {
+    if (!simulateCollision(board, t, t.row, t.col+1)) {
+      return simulatePerformMoveLeft(board, t);
+    } else if (!simulateCollision(board, t, t.row, t.col-1)) {
+      return simulatePerformMoveRight(board, t);
+    } else if (!simulateCollision(board, t, t.row+1, t.col)) {
+      simulateMoveDown(t);
+      return true;
+    }
+    // rotated into solid surface and can't resolve any
+    // way to kick off, rotate back to starting place
+    // and abort the rotate
+    simulateRotate(t);
+    simulateRotate(t);
+    simulateRotate(t);
+    return false;
+  }
+  return true;
+}
+
+bool simulatePerformMoveDown(std::vector<std::vector<char>> &board, Tetromino &t) {
+  simulateMoveDown(t);
+  if (simulateCollision(board, t, t.row, t.col)) {
+    simulateMoveUp(t);
+    simulateCopyToBoard(board, t);
+    return false;
+  }
+  return true;
+}
+
+bool simulateDropTetromino(std::vector<std::vector<char>> &board, Tetromino &t) {
+  int droppedRows = 0;
+  while (simulatePerformMoveDown(board, t)) {
+    droppedRows++;
+  }
+  if (droppedRows) {
+    return true;
+  }
+  return false;
+}
 
 // Returns true if the current Tetromino collides with something
 bool Collision(Tetromino &t, int y, int x) {
@@ -591,6 +1010,7 @@ bool HoldTetromino() {
 void Pause() {
   paused = !paused;
 }
+
 
 // Drops the current Tetromino down until it collides with something
 bool DropTetromino() {
@@ -829,14 +1249,14 @@ void drawAIStats() {
   char outText[20];
   drawText("--AI Learning--", ((float)Cols/2), -3, font, white);
   drawText("Gen:", ((float)Cols/2) - 5, -2, font, white);
-  snprintf(outText, 20, "%d", generation+1);
+  snprintf(outText, 20, "%d", gamesPlayed+1);
   drawText(outText, ((float)Cols / 2) - 2.5, -2, font, white);
   drawText("Nodes: ", ((float)Cols / 2) + 0, -2, font, white);
   snprintf(outText, 20, "%d", brain_nodes);
   drawText(outText, ((float)Cols / 2) + 3.5, -2, font, white);
-  drawText("HiScore: ", ((float)Cols / 2) + 7, -2, font, white);
+  drawText("HiScore: ", ((float)Cols / 2) + 9, -2, font, white);
   snprintf(outText, 20, "%d", bestFit);
-  drawText(outText, ((float)Cols / 2) + 11.5, -2, font, white);
+  drawText(outText, ((float)Cols / 2) + 13.5, -2, font, white);
   // drawText("Neuron: ", (Cols / 2) - 5, 20.5, font, white);
   // snprintf(outText, 20, "%c + %s", curTetrominoShape, currentNeuron.boardState.c_str());
   // drawText(outText, (Cols / 2) - 1, 20.5, font, white);
@@ -942,16 +1362,16 @@ bool performMoveRight() {
   return true;
 }
 
-bool performRotate(Tetromino &t, int y, int x) {
+bool performRotate(Tetromino &t) {
   RotateTetromino(t);
   // Rotated against a solid surface, try to kick off of it
-  if (Collision(t, y, x)) {
+  if (Collision(t, t.row, t.col)) {
     // Wall kicks
-    if (!Collision(t, y, x+1)) {
+    if (!Collision(t, t.row, t.col+1)) {
       return performMoveRight();
-    } else if (!Collision(t, y, x-1)) {
+    } else if (!Collision(t, t.row, t.col-1)) {
       return performMoveLeft();
-    } else if (!Collision(t, y+1, x)) {
+    } else if (!Collision(t, t.row+1, t.col)) {
       MoveTetrominoDown();
       return true;
     }
@@ -972,9 +1392,8 @@ bool performHold() {
 
 int countHolesinColumn(int col) {
   int holes = 0;
-  // don't count top 4 rows for holes
   int i=0;
-  while (i<Rows) {
+  while (i<Rows-1) {
     // count each time we find a block above an empty space
     if (board[i][col] != ' ' && board[i+1][col] == ' ') {
       holes++;
@@ -1053,14 +1472,13 @@ std::string dbFile = "brain.db";
 void initialize_AI() {
   std::cout << "First time AI init\n";
   // current gen
-  generation = 0;
-  genIter = 0;
+  gamesPlayed = 0;
   actionIter = 0;
   float learningRate = 0.1f;
-  float discountFactor = 0.9f;
+  float gamma = 0.99f; // discount factor
   float explorationRate = 1.0f;
   float minExplorationRate = 0.01f;
-  float explorationDecayRate = 0.99f;
+  float explorationDecayRate = 0.001f;
 
   highScores = std::vector<int>();
   int rc = sqlite3_open(dbFile.c_str(), &db);
@@ -1068,15 +1486,8 @@ void initialize_AI() {
     std::cerr << "Can't open database: " << sqlite3_errmsg(db) << std::endl;
     sqlite3_close(db);
   }
-  Individual temp = Individual(db, learningRate, discountFactor, explorationRate, minExplorationRate, explorationDecayRate);
-  population.push_back(temp);
+  agent = new Individual(db, learningRate, gamma, explorationRate, minExplorationRate, explorationDecayRate);
  
-  //for (int i=0;i<POPULATION_SIZE;i++) {
-  //  std::unordered_map<std::string, std::vector<float>> brain;
-  //  brain.clear();
-  //  Individual temp = Individual(brain);
-  //  population.push_back(temp);
-  //}
 }
 
 char currentMove;
@@ -1085,22 +1496,30 @@ char currentMove;
 void AI_play() {
   // Neuron neuron = population[genIter].findNeuron(curTetrominoInt, boardState);
   // chance is the odds of mutating to perform a random action instead of the best action we have stored
-  //int chance = std::fmaxf(50, 1000-generation);
+  //int chance = std::fmaxf(50, 1000-gamesPlayed);
   // 50 / 1000 = 5% mutation rate
   //int chance = 50;
   // move value must cross this threshold, or we keep trying random moves
   //int threshold = 20;
   //retrieve current board state for the AI to view
   boardState = getBoardState();
+
+  // NOT USING LOOKAHEAD
+  // use lookahead function instead of learning algorithm
+  //Tetromino simTetromino = curTetromino;
+  //currentMove = getBestMove(board, 5, simTetromino);
+  // USING Q-LEARNING
   // retrieve the best action for the current board state
-  currentMove = population[genIter].getBestAction(boardState);
+  currentMove = agent->getBestAction(boardState);
   // cache the move that was performed here
+  // This option uses a map to cache moves, removing duplicates
   cachedMoves[boardState] = currentMove;
+  // This option uses a vector to cache moves, retaining duplicates
   //cachedMoves.push_back({boardState, currentMove});
   //printf("board[%s][%c]\n", boardState.c_str(), currentMove);
   switch (currentMove) {
     case 'w':
-      performRotate(curTetromino, curTetromino.row, curTetromino.col);
+      performRotate(curTetromino);
       break;
     case 's':
       performMoveDown();
@@ -1141,12 +1560,13 @@ void storeCachedMoves() {
     std::string nextState = getBoardState();
     //printf("Storing %lu moves with score %d\n", cachedMoves.size(), pieceValue);
     for (const auto &it : cachedMoves) {
+      int score = getStateScore(it.first, it.second);
       storeMoveValue(it.first, it.second, pieceValue, nextState);
     }
     cachedMoves.clear();
 
-    brain_nodes = population[0].getNodeCount();
-    population[genIter].decayExplorationRate();
+    brain_nodes = agent->getNodeCount();
+    agent->decayExplorationRate();
   }
 }
 
@@ -1220,10 +1640,12 @@ float calcNeuronFitness() {
   // add up total value of all parameters
   float total_value = (score_value + holes_value + height_value - moves_value);
   //printf("action taken: %c\n", currentMove);
-  printCachedMoves();
-  printf("Holes: %d Best H: %d Height: %d Score: %d Moves: %d\n", new_holes, prevLowestColumnHeight, lowestPlacedBlock, new_score, moves);
-  printf("HV: %2.2f HV: %2.2f SV: %2.2f MV: %2.2f\n", holes_value, height_value, score_value, -moves_value);
-  printf("Total move value: %2.2f\n", total_value);
+  //
+  //printCachedMoves();
+  //printf("Holes: %d Best H: %d Height: %d Score: %d Moves: %d\n", new_holes, prevLowestColumnHeight, lowestPlacedBlock, new_score, moves);
+  //printf("HV: %2.2f HV: %2.2f SV: %2.2f MV: %2.2f\n", holes_value, height_value, score_value, -moves_value);
+  //printf("Total move value: %2.2f\n", total_value);
+  //
   //printf("prevScore: %2d prevHoles: %2d prevHeight: %d\n", prevScore, prevHoles, prevHeight);
   //printf("newScore:  %2d newHoles:  %2d newHeight:  %d\n", score, holes, height);
   //printf("distance from lowest column %d: %d\n", lowestColumn, distanceFromLowestColumn);
@@ -1243,7 +1665,7 @@ float calcNeuronFitness() {
 void storeMoveValue(const std::string &state, char move, float value, std::string &nextState) {
   // we don't want to store useless neurons
   // store current Neuron
-  population[genIter].storeMoveValue(state, move, value, nextState);
+  agent->storeMoveValue(state, move, value, nextState);
 }
 
 /*
@@ -1292,28 +1714,35 @@ void AI_create_generation() {
 
 }
 */
+const int reportInterval = 100;
 void AI_next_iteration() {
-  if (genIter++ >= (POPULATION_SIZE - 1)) {
-    genIter = 0;
 
-    // store high score for this generation
-    // only store every 100th generation high score
-    if (generation%100==0) {
-      highScores.push_back(bestFit);
-      printf("High Scores:\n");
-      for (int i=0;i<highScores.size();i++) {
-        printf("\tGen: %d\tHigh Score: %d\n", i+1, highScores[i]);
+  // store high score for this generation
+  // only store every 100th generation high score
+  // highScores.push_back(bestFit);
+  agent->storeHighScore(gamesPlayed, score);
+  gamesPlayed = agent->getNumScores();
+  if ((gamesPlayed%reportInterval)==0) {
+    std::vector<std::pair<int, int>> highScores = agent->getHighScores();
+    printf("High Scores:\n");
+    int count = 0;
+    int sum = 0;
+    for (int i=0;i<highScores.size();i++) {
+      sum += highScores[i].second;
+      if (((i+1) % reportInterval) == 0) {
+        printf("\tGen: %d\tAverage Score: %2.2f\n", i+1, (float)sum/(reportInterval));
+        sum = 0;
       }
+
     }
-    //bestFit = 0;
-    // increment the ai generation
-    generation++;
-
-    // print high scores
-
-    // we tested all of our population, time to pick the best and make a new one
-    //AI_create_generation();
   }
+  //bestFit = 0;
+  // increment the ai generation
+
+  // print high scores
+
+  // we tested all of our population, time to pick the best and make a new one
+  //AI_create_generation();
 }
 
 void soft_reset() {
@@ -1329,7 +1758,7 @@ void soft_reset() {
       bestFit = score;
     }
 
-    printf("Generation: %d\tScore: %d\tNeurons: %d\n", generation, score, brain_nodes); 
+    printf("Generation: %d\tScore: %d\tNeurons: %d\n", gamesPlayed, score, brain_nodes); 
     //printf("Generation: %d\tScore: %d\n", generation, score);
     // Advance AI generation
     AI_next_iteration();
@@ -1477,7 +1906,7 @@ int real_main(int argc, char** argv) {
           case ALLEGRO_KEY_W:
             if (paused || gameover)
               break;
-            if (performRotate(curTetromino, curTetromino.row, curTetromino.col)) {
+            if (performRotate(curTetromino)) {
               // play rotate sound to indicate successful rotate
               al_play_sample(tetromino_rotate, volume, 0.0, 1.0, ALLEGRO_PLAYMODE_ONCE, NULL);
             } else {
@@ -1588,6 +2017,7 @@ int real_main(int argc, char** argv) {
   }
 
 
+  delete agent;
   sqlite3_close(db);
   al_destroy_font(font);
   al_destroy_display(disp);
