@@ -1,6 +1,45 @@
+
+PLATFORM ?= PLATFORM_DESKTOP
+
+# Determine PLATFORM_OS in case PLATFORM_DESKTOP selected
+ifeq ($(PLATFORM),PLATFORM_DESKTOP)
+    # No uname.exe on MinGW!, but OS=Windows_NT on Windows!
+    # ifeq ($(UNAME),Msys) -> Windows
+    ifeq ($(OS),Windows_NT)
+        PLATFORM_OS = WINDOWS
+        ifndef PLATFORM_SHELL
+            PLATFORM_SHELL = cmd
+        endif
+    else
+        UNAMEOS = $(shell uname)
+        ifeq ($(UNAMEOS),Linux)
+            PLATFORM_OS = LINUX
+        endif
+        ifeq ($(UNAMEOS),FreeBSD)
+            PLATFORM_OS = BSD
+        endif
+        ifeq ($(UNAMEOS),OpenBSD)
+            PLATFORM_OS = BSD
+        endif
+        ifeq ($(UNAMEOS),NetBSD)
+            PLATFORM_OS = BSD
+        endif
+        ifeq ($(UNAMEOS),DragonFly)
+            PLATFORM_OS = BSD
+        endif
+        ifeq ($(UNAMEOS),Darwin)
+            PLATFORM_OS = OSX
+        endif
+        ifndef PLATFORM_SHELL
+            PLATFORM_SHELL = sh
+        endif
+    endif
+endif
+
 CXX := clang++
 #CXX_FLAGS := -mmacosx-version-min=12.6 -O3 -std=c++17 -ggdb -lncurses `pkg-config --cflags allegro-5 allegro_font-5 allegro_ttf-5 allegro_image-5 allegro_primitives-5 allegro_audio-5 allegro_acodec-5`
-CXX_FLAGS := -mmacosx-version-min=12.6 -O3 -std=c++17 -ggdb -lncurses -I/usr/local/include -rpath /usr/local/lib
+
+CXX_FLAGS := -O3 -std=c++17 -ggdb -lncurses -I/usr/local/include -rpath /usr/local/lib
 
 
 BIN := bin
